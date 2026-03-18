@@ -7,10 +7,26 @@ import { OneDriveProvider } from "./providers/OneDriveProvider";
 import { GDriveProvider } from "./providers/GDriveProvider";
 import { runPipeline } from "./sync/pipeline";
 import { MultiSyncSettingsTab } from "./settings";
+import {
+  CALLBACK_DROPBOX,
+  CALLBACK_ONEDRIVE,
+  CALLBACK_GDRIVE,
+  exchangeDropboxCode,
+  exchangeOneDriveCode,
+  exchangeGDriveCode,
+} from "./oauth";
+
+/** Transient OAuth state shared between settings tab and URI callbacks */
+export interface OAuth2Info {
+  verifier?: string;
+  accountId?: string;
+  manual?: boolean;
+}
 
 export default class MultiSyncPlugin extends Plugin {
   settings!: MultiSyncSettings;
   providers: Map<string, ICloudProvider> = new Map();
+  oauth2Info: OAuth2Info = {};
 
   async onload() {
     await this.loadSettings();
@@ -42,6 +58,95 @@ export default class MultiSyncPlugin extends Plugin {
 
     // Settings tab
     this.addSettingTab(new MultiSyncSettingsTab(this.app, this));
+
+    // ─── OAuth URI Handlers ───
+    this.registerObsidianProtocolHandler(
+      CALLBACK_DROPBOX,
+      async (params) => {
+        if (!params.code || !this.oauth2Info.verifier || !this.oauth2Info.accountId) {
+          new Notice("MultiSync: Dropbox auth failed — missing code or verifier.");
+          return;
+        }
+        try {
+          const account = this.settings.accounts.find(a => a.id === this.oauth2Info.accountId);
+          if (!account) throw new Error("Account not found");
+          const result = await exchangeDropboxCode(
+            account.credentials.appKey,
+            params.code,
+            this.oauth2Info.verifier,
+            !!this.oauth2Info.manual
+          );
+          account.credentials.accessToken = result.access_token;
+          account.credentials.refreshToken = result.refresh_token;
+          account.credentials.tokenExpiry = String(Date.now() + result.expires_in * 1000 - 10000);
+          await this.saveSettings();
+          this.initProviders();
+          new Notice("MultiSync: Dropbox connected!");
+        } catch (e: any) {
+          new Notice(`MultiSync: Dropbox auth failed — ${e?.message || e}`);
+        }
+        this.oauth2Info = {};
+      }
+    );
+
+    this.registerObsidianProtocolHandler(
+      CALLBACK_ONEDRIVE,
+      async (params) => {
+        if (!params.code || !this.oauth2Info.verifier || !this.oauth2Info.accountId) {
+          new Notice("MultiSync: OneDrive auth failed — missing code or verifier.");
+          return;
+        }
+        try {
+          const account = this.settings.accounts.find(a => a.id === this.oauth2Info.accountId);
+          if (!account) throw new Error("Account not found");
+          const result = await exchangeOneDriveCode(
+            account.credentials.clientId,
+            params.code,
+            this.oauth2Info.verifier,
+            !!this.oauth2Info.manual
+          );
+          account.credentials.accessToken = result.access_token;
+          account.credentials.refreshToken = result.refresh_token;
+          account.credentials.tokenExpiry = String(Date.now() + result.expires_in * 1000 - 120000);
+          await this.saveSettings();
+          this.initProviders();
+          new Notice("MultiSync: OneDrive connected!");
+        } catch (e: any) {
+          new Notice(`MultiSync: OneDrive auth failed — ${e?.message || e}`);
+        }
+        this.oauth2Info = {};
+      }
+    );
+
+    this.registerObsidianProtocolHandler(
+      CALLBACK_GDRIVE,
+      async (params) => {
+        if (!params.code || !this.oauth2Info.verifier || !this.oauth2Info.accountId) {
+          new Notice("MultiSync: Google Drive auth failed — missing code or verifier.");
+          return;
+        }
+        try {
+          const account = this.settings.accounts.find(a => a.id === this.oauth2Info.accountId);
+          if (!account) throw new Error("Account not found");
+          const result = await exchangeGDriveCode(
+            account.credentials.clientId,
+            account.credentials.clientSecret,
+            params.code,
+            this.oauth2Info.verifier,
+            !!this.oauth2Info.manual
+          );
+          account.credentials.accessToken = result.access_token;
+          account.credentials.refreshToken = result.refresh_token;
+          account.credentials.tokenExpiry = String(Date.now() + result.expires_in * 1000 - 120000);
+          await this.saveSettings();
+          this.initProviders();
+          new Notice("MultiSync: Google Drive connected!");
+        } catch (e: any) {
+          new Notice(`MultiSync: Google Drive auth failed — ${e?.message || e}`);
+        }
+        this.oauth2Info = {};
+      }
+    );
   }
 
   onunload() {

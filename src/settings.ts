@@ -1,10 +1,10 @@
 import {
   App,
+  Modal,
   Notice,
+  Platform,
   PluginSettingTab,
   Setting,
-  TextComponent,
-  DropdownComponent,
 } from "obsidian";
 import type MultiSyncPlugin from "./main";
 import type {
@@ -14,6 +14,15 @@ import type {
   SyncStep,
   SyncOpType,
 } from "./types";
+import {
+  needsManualPaste,
+  getDropboxAuthUrl,
+  getOneDriveAuthUrl,
+  getGDriveAuthUrl,
+  exchangeDropboxCode,
+  exchangeOneDriveCode,
+  exchangeGDriveCode,
+} from "./oauth";
 
 const CLOUD_TYPES: { value: CloudProviderType; label: string }[] = [
   { value: "dropbox", label: "Dropbox" },
@@ -188,10 +197,17 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
       });
     });
 
-    // Credentials button (opens a modal or inline fields)
+    // Credentials button
     s.addButton((btn) =>
       btn.setButtonText("Credentials").onClick(() => {
         this.renderCredentials(containerEl, account);
+      })
+    );
+
+    // Authorize button (OAuth flow)
+    s.addButton((btn) =>
+      btn.setButtonText("Authorize").setCta().onClick(async () => {
+        await this.startOAuthFlow(account);
       })
     );
 
@@ -413,5 +429,169 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
           this.display();
         })
     );
+  }
+
+  private async startOAuthFlow(account: CloudAccount) {
+    const missing = this.getMissingCredFields(account);
+    if (missing.length > 0) {
+      new Notice(`Set ${missing.join(", ")} in credentials first.`);
+      return;
+    }
+
+    const manual = needsManualPaste();
+    let authUrl: string;
+    let verifier: string;
+
+    try {
+      switch (account.type) {
+        case "dropbox": {
+          const r = await getDropboxAuthUrl(account.credentials.appKey, manual);
+          authUrl = r.authUrl;
+          verifier = r.verifier;
+          break;
+        }
+        case "onedrive": {
+          const r = await getOneDriveAuthUrl(account.credentials.clientId, manual);
+          authUrl = r.authUrl;
+          verifier = r.verifier;
+          break;
+        }
+        case "gdrive": {
+          const r = await getGDriveAuthUrl(account.credentials.clientId, manual);
+          authUrl = r.authUrl;
+          verifier = r.verifier;
+          break;
+        }
+        default:
+          new Notice("Unknown provider type");
+          return;
+      }
+    } catch (e: any) {
+      new Notice(`OAuth error: ${e?.message || e}`);
+      return;
+    }
+
+    this.plugin.oauth2Info = { verifier, accountId: account.id, manual };
+
+    if (manual) {
+      new AuthCodeModal(this.app, this.plugin, account, verifier, authUrl).open();
+    } else {
+      window.open(authUrl);
+      new Notice("Browser opened for authorization. Return here after granting access.");
+    }
+  }
+
+  private getMissingCredFields(account: CloudAccount): string[] {
+    const missing: string[] = [];
+    switch (account.type) {
+      case "dropbox":
+        if (!account.credentials.appKey) missing.push("App Key");
+        break;
+      case "onedrive":
+        if (!account.credentials.clientId) missing.push("Client ID");
+        break;
+      case "gdrive":
+        if (!account.credentials.clientId) missing.push("Client ID");
+        if (!account.credentials.clientSecret) missing.push("Client Secret");
+        break;
+    }
+    return missing;
+  }
+}
+
+class AuthCodeModal extends Modal {
+  private plugin: MultiSyncPlugin;
+  private account: CloudAccount;
+  private verifier: string;
+  private authUrl: string;
+
+  constructor(
+    app: App,
+    plugin: MultiSyncPlugin,
+    account: CloudAccount,
+    verifier: string,
+    authUrl: string
+  ) {
+    super(app);
+    this.plugin = plugin;
+    this.account = account;
+    this.verifier = verifier;
+    this.authUrl = authUrl;
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl("h3", { text: `Authorize ${this.account.name}` });
+    contentEl.createEl("p", { text: "1. Copy the auth URL and open in browser." });
+    contentEl.createEl("p", { text: "2. Grant access, then copy the authorization code." });
+    contentEl.createEl("p", { text: "3. Paste the code below and submit." });
+
+    new Setting(contentEl)
+      .setName("Auth URL")
+      .addButton((btn) =>
+        btn.setButtonText("Copy URL").setCta().onClick(async () => {
+          await navigator.clipboard.writeText(this.authUrl);
+          new Notice("Auth URL copied to clipboard!");
+        })
+      );
+
+    let codeValue = "";
+    new Setting(contentEl)
+      .setName("Authorization Code")
+      .addText((text) =>
+        text.setPlaceholder("Paste code here").onChange((val) => {
+          codeValue = val.trim();
+        })
+      )
+      .addButton((btn) =>
+        btn.setButtonText("Submit").setCta().onClick(async () => {
+          if (!codeValue) {
+            new Notice("Please paste the authorization code.");
+            return;
+          }
+          try {
+            await this.exchangeCode(codeValue);
+            new Notice(`${this.account.name} connected!`);
+            this.close();
+          } catch (e: any) {
+            new Notice(`Auth failed: ${e?.message || e}`);
+          }
+        })
+      );
+  }
+
+  private async exchangeCode(code: string) {
+    const creds = this.account.credentials;
+    switch (this.account.type) {
+      case "dropbox": {
+        const r = await exchangeDropboxCode(creds.appKey, code, this.verifier, true);
+        creds.accessToken = r.access_token;
+        creds.refreshToken = r.refresh_token;
+        creds.tokenExpiry = String(Date.now() + r.expires_in * 1000 - 10000);
+        break;
+      }
+      case "onedrive": {
+        const r = await exchangeOneDriveCode(creds.clientId, code, this.verifier, true);
+        creds.accessToken = r.access_token;
+        creds.refreshToken = r.refresh_token;
+        creds.tokenExpiry = String(Date.now() + r.expires_in * 1000 - 120000);
+        break;
+      }
+      case "gdrive": {
+        const r = await exchangeGDriveCode(creds.clientId, creds.clientSecret, code, this.verifier, true);
+        creds.accessToken = r.access_token;
+        creds.refreshToken = r.refresh_token;
+        creds.tokenExpiry = String(Date.now() + r.expires_in * 1000 - 120000);
+        break;
+      }
+    }
+    await this.plugin.saveSettings();
+    this.plugin.initProviders();
+  }
+
+  onClose() {
+    this.contentEl.empty();
+    this.plugin.oauth2Info = {};
   }
 }
