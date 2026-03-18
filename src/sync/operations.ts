@@ -36,6 +36,8 @@ export function detectLocalUpdates(
         path: local.path,
         isFolder: false,
         sourceEntry: local,
+        cloudHash: cloud.hash,
+        cloudMtime: cloud.mtime,
       });
     }
   }
@@ -106,10 +108,15 @@ export function detectCloudAdds(
 ): SyncAction[] {
   const localMap = indexByPath(localList);
   const deleteSet = new Set(pendingDeletes.map(d => d.path));
+  // Collect deleted folder prefixes to block re-adding children
+  const deletedFolderPrefixes = pendingDeletes
+    .filter(d => d.path.endsWith("/"))
+    .map(d => d.path);
   const actions: SyncAction[] = [];
   for (const cloud of cloudList) {
     if (localMap.has(cloud.path)) continue;
     if (deleteSet.has(cloud.path)) continue; // this file was locally deleted → will be handled by local-delete
+    if (deletedFolderPrefixes.some(fp => cloud.path.startsWith(fp))) continue; // parent folder was deleted
     actions.push({
       operation: "cloud-add",
       path: cloud.path,

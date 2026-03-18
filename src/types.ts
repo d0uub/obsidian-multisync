@@ -14,6 +14,8 @@ export interface FileEntry {
   isFolder: boolean;
   /** Optional content hash for smarter diff */
   hash?: string;
+  /** Optional creation timestamp in ms (epoch) */
+  ctime?: number;
 }
 
 /** Supported cloud provider types */
@@ -74,6 +76,10 @@ export interface SyncAction {
   isFolder: boolean;
   /** The source entry (local or cloud depending on operation) */
   sourceEntry?: FileEntry;
+  /** Cloud file hash for hash-based skip (set on local-update actions) */
+  cloudHash?: string;
+  /** Cloud file mtime for mtime alignment after hash-match skip (set on local-update actions) */
+  cloudMtime?: number;
 }
 
 /** Plugin settings persisted to data.json */

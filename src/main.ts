@@ -1,4 +1,4 @@
-import { Notice, Plugin } from "obsidian";
+import { Notice, Plugin, TFolder } from "obsidian";
 import type { MultiSyncSettings, CloudAccount } from "./types";
 import { DEFAULT_SETTINGS } from "./types";
 import type { ICloudProvider } from "./providers/ICloudProvider";
@@ -38,12 +38,14 @@ export default class MultiSyncPlugin extends Plugin {
     this.registerEvent(
       this.app.vault.on("delete", (file) => {
         const filePath = file.path;
+        const isFolder = file instanceof TFolder;
         for (const rule of this.settings.rules) {
           const prefix = rule.localFolder ? rule.localFolder + "/" : "";
           if (prefix && !filePath.startsWith(prefix)) continue;
           if (!prefix && filePath.startsWith(".")) continue; // skip hidden files at root
-          const relativePath = prefix ? filePath.substring(prefix.length) : filePath;
+          let relativePath = prefix ? filePath.substring(prefix.length) : filePath;
           if (!relativePath) continue;
+          if (isFolder && !relativePath.endsWith("/")) relativePath += "/";
           if (!this.settings.pendingCloudDeletes[rule.id]) {
             this.settings.pendingCloudDeletes[rule.id] = [];
           }

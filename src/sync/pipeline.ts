@@ -9,6 +9,7 @@ import type {
 import type { ICloudProvider } from "../providers/ICloudProvider";
 import { OPERATION_DETECTORS } from "./operations";
 import { normalizePath } from "../utils/helpers";
+import { computeLocalHash } from "../utils/hashing";
 
 /**
  * SyncPipeline orchestrator.
@@ -75,6 +76,7 @@ export async function runPipeline(
       // Execute actions concurrently
       const concurrency = ctx.settings.concurrency || 4;
       let pendingSaves = 0;
+      let stepExecuted = 0;
       let i = 0;
       const runNext = async (): Promise<void> => {
         while (i < actions.length) {
@@ -82,7 +84,9 @@ export async function runPipeline(
           try {
             ctx.onAction?.(action, step);
             if (!ctx.dryRun) {
-              await executeAction(action, rule, provider, ctx);
+              const executed = await executeAction(action, rule, provider, ctx);
+              if (!executed) continue; // hash match — skipped
+              stepExecuted++;
               // If this was a local-delete or re-download (from pending), remove from pending list
               if (step.operation === "local-delete") {
                 const pending = ctx.settings.pendingCloudDeletes[rule.id];
@@ -99,7 +103,9 @@ export async function runPipeline(
             }
             actionsExecuted++;
           } catch (e: any) {
-            errors.push(`Failed ${action.operation} ${action.path}: ${e?.message || e}`);
+            const detail = e?.status ? `status ${e.status}` : (e?.message || e);
+            errors.push(`Failed ${action.operation} ${action.path}: ${detail}`);
+            console.error("MultiSync action error:", action.operation, action.path, e);
           }
         }
       };
@@ -108,8 +114,18 @@ export async function runPipeline(
         await ctx.saveSettings();
       }
 
-      if (actions.length > 0 && !ctx.dryRun) {
-        listCaches.delete(rule.id);
+      // Partial cache invalidation: only re-list what actually changed
+      if (stepExecuted > 0 && !ctx.dryRun) {
+        const cached = listCaches.get(rule.id);
+        if (cached) {
+          if (step.operation === "cloud-add" || step.operation === "cloud-update" || step.operation === "cloud-delete") {
+            // Only local changed → re-fetch local list, keep cloud list
+            cached.localList = await listLocalFiles(ctx.app, rule.localFolder);
+          } else {
+            // local-add, local-update, local-delete → cloud changed → re-fetch cloud list, keep local
+            cached.cloudList = await provider.listFiles(rule.cloudFolder);
+          }
+        }
       }
     } catch (e: any) {
       errors.push(`Step ${step.ruleId}/${step.operation} failed: ${e?.message || e}`);
@@ -124,13 +140,13 @@ export async function runPipeline(
   return { actionsExecuted, errors };
 }
 
-/** Execute a single sync action */
+/** Execute a single sync action. Returns true if actually executed, false if skipped (hash match). */
 async function executeAction(
   action: SyncAction,
   rule: SyncRule,
   provider: ICloudProvider,
   ctx: PipelineContext
-): Promise<void> {
+): Promise<boolean> {
   const { app } = ctx;
   const normalizedBase = normalizePath(rule.localFolder);
 
@@ -143,21 +159,51 @@ async function executeAction(
       // Local file is newer → push to cloud
       const localPath = toVaultPath(action.path);
       const content = await app.vault.adapter.readBinary(localPath);
+      // Hash check: skip upload if content matches cloud
+      if (action.cloudHash) {
+        const localHash = await computeLocalHash(provider.kind, content);
+        if (localHash && localHash === action.cloudHash) {
+          ctx.onProgress?.(`[skip] ${action.path} (hash match)`);
+          // Align local mtime to cloud's so next sync sees them as equal
+          if (action.cloudMtime) {
+            try { await app.vault.adapter.writeBinary(localPath, content, { mtime: action.cloudMtime }); } catch { /* best effort */ }
+          }
+          return false;
+        }
+      }
       await provider.writeFile(
         rule.cloudFolder,
         action.path,
         content,
-        action.sourceEntry?.mtime || Date.now()
+        action.sourceEntry?.mtime || Date.now(),
+        action.sourceEntry?.ctime
       );
       break;
     }
     case "cloud-update": {
       // Cloud file is newer → pull to local
+      // Hash check: read local file first, compare hash to skip download
+      const localPathUpd = toVaultPath(action.path);
+      if (action.sourceEntry?.hash) {
+        try {
+          const localContent = await app.vault.adapter.readBinary(localPathUpd);
+          const localHash = await computeLocalHash(provider.kind, localContent);
+          if (localHash && localHash === action.sourceEntry.hash) {
+            ctx.onProgress?.(`[skip] ${action.path} (hash match)`);
+            // Align local mtime to cloud so next sync sees them as equal
+            const cloudMtime = action.sourceEntry.mtime;
+            if (cloudMtime) {
+              try { await app.vault.adapter.writeBinary(localPathUpd, localContent, { mtime: cloudMtime }); } catch { /* best effort */ }
+            }
+            return false;
+          }
+        } catch { /* file may not exist yet, proceed with download */ }
+      }
       const content = await provider.readFile(rule.cloudFolder, action.path);
-      const localPath = toVaultPath(action.path);
-      await ensureLocalParentDir(app, localPath);
+      await ensureLocalParentDir(app, localPathUpd);
       const mtime = action.sourceEntry?.mtime || Date.now();
-      await app.vault.adapter.writeBinary(localPath, content, { mtime });
+      const ctime = action.sourceEntry?.ctime;
+      await app.vault.adapter.writeBinary(localPathUpd, content, { mtime, ...(ctime ? { ctime } : {}) });
       break;
     }
     case "local-add": {
@@ -170,7 +216,8 @@ async function executeAction(
           rule.cloudFolder,
           action.path,
           content,
-          action.sourceEntry?.mtime || Date.now()
+          action.sourceEntry?.mtime || Date.now(),
+          action.sourceEntry?.ctime
         );
       }
       break;
@@ -184,7 +231,8 @@ async function executeAction(
         const localPath = toVaultPath(action.path);
         await ensureLocalParentDir(app, localPath);
         const mtime = action.sourceEntry?.mtime || Date.now();
-        await app.vault.adapter.writeBinary(localPath, content, { mtime });
+        const ctime = action.sourceEntry?.ctime;
+        await app.vault.adapter.writeBinary(localPath, content, { mtime, ...(ctime ? { ctime } : {}) });
       }
       break;
     }
@@ -204,6 +252,7 @@ async function executeAction(
       break;
     }
   }
+  return true;
 }
 
 /** List local files under a vault folder, returning FileEntry[] with paths relative to that folder */
@@ -226,6 +275,7 @@ export async function listLocalFiles(
       mtime: file.stat.mtime,
       size: file.stat.size,
       isFolder: false,
+      ctime: file.stat.ctime,
     });
   }
 
@@ -271,9 +321,11 @@ async function getOrFetchLists(
 
   ctx.onProgress?.(`[${rule.id}] Listing cloud files...`);
   const cloudList = await provider.listFiles(rule.cloudFolder);
+  ctx.onProgress?.(`[${rule.id}] Cloud: ${cloudList.length} items`);
 
   ctx.onProgress?.(`[${rule.id}] Listing local files...`);
   const localList = await listLocalFiles(ctx.app, rule.localFolder);
+  ctx.onProgress?.(`[${rule.id}] Local: ${localList.length} items`);
 
   const entry: ListCache = { cloudList, localList };
   cache.set(rule.id, entry);

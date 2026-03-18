@@ -34,7 +34,8 @@ export interface ICloudProvider {
     cloudFolder: string,
     relativePath: string,
     content: ArrayBuffer,
-    mtime: number
+    mtime: number,
+    ctime?: number
   ): Promise<void>;
 
   /**

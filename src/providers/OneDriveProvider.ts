@@ -69,6 +69,11 @@ export class OneDriveProvider implements ICloudProvider {
         return await fn();
       } catch (e: any) {
         const status = e?.status || (e?.message?.match(/status (\d+)/)?.[1] && parseInt(e.message.match(/status (\d+)/)[1]));
+        if (status === 401 && attempt < maxRetries) {
+          this.tokenExpiry = 0; // force refresh
+          await this.ensureToken();
+          continue;
+        }
         if ((status === 429 || status === 503) && attempt < maxRetries) {
           // Retry-After header or exponential backoff
           const delay = Math.min(1000 * Math.pow(2, attempt), 10000);
@@ -171,46 +176,68 @@ export class OneDriveProvider implements ICloudProvider {
 
   async listFiles(cloudFolder: string): Promise<FileEntry[]> {
     const entries: FileEntry[] = [];
-    const driveItemPath =
-      cloudFolder === "/" || cloudFolder === ""
-        ? "/me/drive/root"
-        : `/me/drive/root:${this.encodeGraphPath(this.ensureLeadingSlash(cloudFolder))}:`;
+    const prefix = (cloudFolder === "/" || cloudFolder === "")
+      ? ""
+      : (cloudFolder.startsWith("/") ? cloudFolder.substring(1) : cloudFolder);
 
-    // Recursive listing via /children
-    const recurse = async (apiPath: string, prefix: string) => {
-      let url = `${apiPath}/children?$select=name,size,lastModifiedDateTime,folder,file&$top=200`;
-      while (url) {
-        let data: any;
-        try {
-          data = await this.graphGetRaw(url);
-        } catch (e: any) {
-          // 404 = folder doesn't exist on cloud yet → return empty
-          if (e?.status === 404 || e?.message?.includes("404")) return;
-          throw e;
-        }
-        for (const item of data.value || []) {
-          const itemPath = prefix ? `${prefix}/${item.name}` : item.name;
-          const isFolder = !!item.folder;
-          entries.push({
-            path: isFolder ? itemPath + "/" : itemPath,
-            mtime: new Date(item.lastModifiedDateTime).getTime(),
-            size: item.size || 0,
-            isFolder,
-            hash: item.file?.hashes?.quickXorHash,
-          });
-          if (isFolder) {
-            await recurse(`/me/drive/items/${item.id}`, itemPath);
-          }
-        }
-        url = data["@odata.nextLink"] || "";
-        if (url) {
-          // nextLink is absolute URL, strip the graph prefix
-          url = url.replace("https://graph.microsoft.com/v1.0", "");
-        }
+    // Use delta API for flat enumeration of entire tree (much faster than recursive children)
+    const deltaPath = prefix
+      ? `/me/drive/root:/${this.encodeGraphPath(prefix)}:/delta?$select=id,name,size,lastModifiedDateTime,createdDateTime,folder,file,deleted,parentReference&$top=200`
+      : `/me/drive/root/delta?$select=id,name,size,lastModifiedDateTime,createdDateTime,folder,file,deleted,parentReference&$top=200`;
+
+    let url: string = deltaPath;
+    while (url) {
+      let data: any;
+      try {
+        data = await this.graphGetRaw(url);
+      } catch (e: any) {
+        if (e?.status === 404 || e?.message?.includes("404")) return entries;
+        throw e;
       }
-    };
+      for (const item of data.value || []) {
+        // Skip root item itself (has no parentReference path matching our prefix)
+        if (item.root) continue;
+        // Skip deleted items
+        if (item.deleted) continue;
 
-    await recurse(driveItemPath, "");
+        // Reconstruct relative path from parentReference
+        const parentPath = item.parentReference?.path || "";
+        const rootPrefix = "/drive/root:";
+        let itemFolder = "";
+        if (parentPath.includes(rootPrefix)) {
+          const raw = parentPath.substring(parentPath.indexOf(rootPrefix) + rootPrefix.length);
+          itemFolder = decodeURIComponent(raw.startsWith("/") ? raw.substring(1) : raw);
+        }
+        const fullPath = itemFolder ? `${itemFolder}/${item.name}` : item.name;
+
+        // Filter to items under our cloudFolder
+        let relativePath: string;
+        if (prefix) {
+          if (!fullPath.startsWith(prefix + "/") && fullPath !== prefix) continue;
+          relativePath = fullPath.substring(prefix.length + 1);
+        } else {
+          relativePath = fullPath;
+        }
+        if (!relativePath) continue;
+
+        const isFolder = !!item.folder;
+        entries.push({
+          path: isFolder ? relativePath + "/" : relativePath,
+          mtime: new Date(item.lastModifiedDateTime).getTime(),
+          size: item.size || 0,
+          isFolder,
+          hash: item.file?.hashes?.quickXorHash,
+          ctime: item.createdDateTime ? new Date(item.createdDateTime).getTime() : undefined,
+        });
+      }
+
+      if (data["@odata.nextLink"]) {
+        url = (data["@odata.nextLink"] as string).replace("https://graph.microsoft.com/v1.0", "");
+      } else {
+        url = "";
+      }
+    }
+
     return entries;
   }
 
@@ -231,22 +258,20 @@ export class OneDriveProvider implements ICloudProvider {
 
   async readFile(cloudFolder: string, relativePath: string): Promise<ArrayBuffer> {
     const itemPath = this.encodePath(cloudFolder, relativePath);
-    await this.ensureToken();
-    return this.withRetry(async () => {
-      const resp = await requestUrl({
-        url: `https://graph.microsoft.com/v1.0${itemPath}:/content`,
-        method: "GET",
-        headers: { Authorization: `Bearer ${this.accessToken}` },
-      });
-      return resp.arrayBuffer;
-    });
+    // Get pre-authenticated download URL (avoids 302→401 CORS issue with /content)
+    const meta = await this.graphGet(`${itemPath}?select=id,@microsoft.graph.downloadUrl`);
+    const downloadUrl = meta["@microsoft.graph.downloadUrl"];
+    if (!downloadUrl) throw new Error("No download URL for " + relativePath);
+    const resp = await requestUrl({ url: downloadUrl, method: "GET" });
+    return resp.arrayBuffer;
   }
 
   async writeFile(
     cloudFolder: string,
     relativePath: string,
     content: ArrayBuffer,
-    mtime: number
+    mtime: number,
+    ctime?: number
   ): Promise<void> {
     const fullPath = joinCloudPath(cloudFolder, relativePath);
     // Ensure parent folders exist
@@ -269,15 +294,17 @@ export class OneDriveProvider implements ICloudProvider {
     // For files < 4MB, use simple upload
     const itemPath = `/me/drive/root:${this.encodeGraphPath(this.ensureLeadingSlash(fullPath))}:`;
     await this.graphPut(`${itemPath}/content`, content);
-    // Set file modification time to match local source
+    // Set file timestamps to match local source
     if (mtime > 0) {
       try {
-        await this.graphPatch(itemPath, {
-          fileSystemInfo: {
-            lastModifiedDateTime: new Date(mtime).toISOString(),
-          },
-        });
-      } catch { /* mtime patch failed silently */ }
+        const fsInfo: Record<string, string> = {
+          lastModifiedDateTime: new Date(mtime).toISOString(),
+        };
+        if (ctime && ctime > 0) {
+          fsInfo.createdDateTime = new Date(ctime).toISOString();
+        }
+        await this.graphPatch(itemPath, { fileSystemInfo: fsInfo });
+      } catch { /* timestamp patch failed silently */ }
     }
   }
 
@@ -311,7 +338,7 @@ export class OneDriveProvider implements ICloudProvider {
     const fullPath = joinCloudPath(cloudFolder, relativePath);
     try {
       const data = await this.graphGet(
-        `/me/drive/root:${this.encodeGraphPath(this.ensureLeadingSlash(fullPath))}:?$select=name,size,lastModifiedDateTime,folder,file`
+        `/me/drive/root:${this.encodeGraphPath(this.ensureLeadingSlash(fullPath))}:?$select=name,size,lastModifiedDateTime,createdDateTime,folder,file`
       );
       return {
         path: relativePath,
@@ -319,6 +346,7 @@ export class OneDriveProvider implements ICloudProvider {
         size: data.size || 0,
         isFolder: !!data.folder,
         hash: data.file?.hashes?.quickXorHash,
+        ctime: data.createdDateTime ? new Date(data.createdDateTime).getTime() : undefined,
       };
     } catch {
       return null;
@@ -362,6 +390,7 @@ export class OneDriveProvider implements ICloudProvider {
         if (deltaToken) {
           for (const item of data.value || []) {
             if (!item.deleted) continue;
+            if (!item.name) continue;  // deleted items may lack name
             // Reconstruct the original path from parentReference
             const parentPath = item.parentReference?.path || "";
             const rootPrefix = "/drive/root:";

@@ -146,7 +146,8 @@ export class GDriveProvider implements ICloudProvider {
     cloudFolder: string,
     relativePath: string,
     content: ArrayBuffer,
-    mtime: number
+    mtime: number,
+    ctime?: number
   ): Promise<void> {
     await this.ensureToken();
     const existingId = await this.resolveFileIdSafe(cloudFolder, relativePath);
@@ -186,6 +187,7 @@ export class GDriveProvider implements ICloudProvider {
         name: fileName,
         parents: [parentId],
         modifiedTime: new Date(mtime).toISOString(),
+        ...(ctime ? { createdTime: new Date(ctime).toISOString() } : {}),
       });
       const boundary = "multisync_boundary_" + Date.now();
       const encoder = new TextEncoder();

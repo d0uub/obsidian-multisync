@@ -137,7 +137,8 @@ export class DropboxProvider implements ICloudProvider {
     cloudFolder: string,
     relativePath: string,
     content: ArrayBuffer,
-    mtime: number
+    mtime: number,
+    _ctime?: number
   ): Promise<void> {
     const fullPath = joinCloudPath(cloudFolder, relativePath);
     await this.apiContent(
