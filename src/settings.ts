@@ -42,70 +42,82 @@ const ALL_OPS: { value: SyncOpType; label: string }[] = [
 
 export class MultiSyncSettingsTab extends PluginSettingTab {
   plugin: MultiSyncPlugin;
+  private dragSourceIndex: number = -1;
+  private expandedSteps = new Set<number>();
+  private expandedRules = new Set<string>();
 
   constructor(app: App, plugin: MultiSyncPlugin) {
     super(app, plugin);
     this.plugin = plugin;
   }
 
+  /* ------------------------------------------------------------------ */
+  /*  SVG helper factories                                               */
+  /* ------------------------------------------------------------------ */
+
+  private createRemoveIcon(parent: HTMLElement, onClick: () => Promise<void>): HTMLSpanElement {
+    const span = parent.createSpan({ cls: "mobile-option-setting-item-remove-icon" });
+    span.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="svg-icon lucide-minus-circle"><circle cx="12" cy="12" r="10"></circle><line x1="8" y1="12" x2="16" y2="12"></line></svg>`;
+    span.addEventListener("click", (e) => { e.stopPropagation(); onClick(); });
+    return span;
+  }
+
+  private createDragIcon(parent: HTMLElement): HTMLSpanElement {
+    const span = parent.createSpan({ cls: "mobile-option-setting-item-drag-icon" });
+    span.setAttribute("draggable", "true");
+    span.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="svg-icon lucide-grip-vertical"><circle cx="9" cy="12" r="1"></circle><circle cx="9" cy="5" r="1"></circle><circle cx="9" cy="19" r="1"></circle><circle cx="15" cy="12" r="1"></circle><circle cx="15" cy="5" r="1"></circle><circle cx="15" cy="19" r="1"></circle></svg>`;
+    return span;
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  display()                                                          */
+  /* ------------------------------------------------------------------ */
+
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
 
-    // ─── Cloud Accounts ───
-    this.renderSectionHeader(containerEl, "Cloud Accounts", "+ Add", async () => {
-      const newAccount: CloudAccount = {
-        id: "account-" + Date.now(),
-        type: "dropbox",
-        name: "New Account",
-        credentials: {},
-      };
-      this.plugin.settings.accounts.push(newAccount);
-      await this.plugin.saveSettings();
-      this.plugin.initProviders();
-      this.display();
-    });
+    // Inject drag-and-drop styles once
+    if (!containerEl.querySelector("style.multisync-dnd-styles")) {
+      const style = containerEl.createEl("style");
+      style.className = "multisync-dnd-styles";
+      style.textContent = `
+        .mobile-option-setting-item.is-dragging { opacity: 0.4; }
+        .mobile-option-setting-item.drag-over { border-top: 2px solid var(--interactive-accent); }
+        .mobile-option-setting-item-drag-icon { cursor: grab; }
+        .mobile-option-setting-item-drag-icon:active { cursor: grabbing; }
+        .mobile-option-setting-item-remove-icon { cursor: pointer; }
+        .mobile-option-setting-item-name { flex: 1; }
+        .multisync-step-edit, .multisync-rule-edit { padding: 0 0 8px 40px; }
+      `;
+    }
 
+    // ─── Cloud Accounts ───
+    containerEl.createEl("h2", { text: "Cloud Accounts" });
     for (const account of this.plugin.settings.accounts) {
       this.renderAccount(containerEl, account);
     }
+    this.renderAddAccountRow(containerEl);
 
     // ─── Sync Rules ───
-    this.renderSectionHeader(containerEl, "Sync Rules", "+ Add", async () => {
-      const newRule: SyncRule = {
-        id: "rule-" + Date.now(),
-        accountId: this.plugin.settings.accounts[0]?.id || "",
-        cloudFolder: "",
-        localFolder: "",
-      };
-      this.plugin.settings.rules.push(newRule);
-      await this.plugin.saveSettings();
-      this.display();
-    });
-
+    containerEl.createEl("h2", { text: "Sync Rules" });
     for (const rule of this.plugin.settings.rules) {
       this.renderRule(containerEl, rule);
     }
+    this.renderAddRuleRow(containerEl);
 
     // ─── Pipeline ───
-    this.renderSectionHeader(containerEl, "Sync Pipeline", "+ Add Step", async () => {
-      const newStep: SyncStep = {
-        ruleId: this.plugin.settings.rules[0]?.id || "",
-        operation: "cloud-update",
-      };
-      this.plugin.settings.pipeline.push(newStep);
-      await this.plugin.saveSettings();
-      this.display();
-    });
-
+    containerEl.createEl("h2", { text: "Sync Pipeline" });
     containerEl.createEl("p", {
-      text: "Define the order of operations. Each step = Rule + Operation.",
+      text: "Define the order of operations. Each step = Rule + Operation. Drag to reorder.",
       cls: "setting-item-description",
     });
 
+    const pipelineContainer = containerEl.createDiv({ cls: "multisync-pipeline-list" });
     for (let i = 0; i < this.plugin.settings.pipeline.length; i++) {
-      this.renderPipelineStep(containerEl, i);
+      this.renderPipelineStep(pipelineContainer, i);
     }
+    this.renderAddPipelineRow(pipelineContainer);
 
     // ─── Quick Pipeline Generator ───
     containerEl.createEl("h2", { text: "Quick Generate Pipeline" });
@@ -161,34 +173,38 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
       );
   }
 
-  /** Render section header with an inline add button aligned right */
-  private renderSectionHeader(
-    containerEl: HTMLElement,
-    title: string,
-    buttonText: string,
-    onClick: () => Promise<void>
-  ) {
-    const header = containerEl.createDiv({ cls: "multisync-section-header" });
-    header.style.display = "flex";
-    header.style.alignItems = "center";
-    header.style.justifyContent = "space-between";
-    header.style.marginTop = "1.5em";
-    header.style.marginBottom = "0.5em";
-    header.createEl("h2", { text: title });
-    const btn = header.createEl("button", { text: buttonText, cls: "mod-cta" });
-    btn.style.fontSize = "0.85em";
-    btn.style.padding = "4px 12px";
-    btn.addEventListener("click", onClick);
-  }
+  /* ------------------------------------------------------------------ */
+  /*  Accounts                                                           */
+  /* ------------------------------------------------------------------ */
 
   private renderAccount(containerEl: HTMLElement, account: CloudAccount) {
     const isAuthed = !!(account.credentials.accessToken && account.credentials.refreshToken);
     const typeLabel = CLOUD_TYPES.find(c => c.value === account.type)?.label || account.type;
 
+    const row = containerEl.createDiv({ cls: "mobile-option-setting-item" });
+
+    // ── Remove icon (cascade delete) ──
+    this.createRemoveIcon(row, async () => {
+      this.plugin.settings.accounts =
+        this.plugin.settings.accounts.filter((a) => a.id !== account.id);
+      this.plugin.settings.rules = this.plugin.settings.rules.filter(
+        (r) => r.accountId !== account.id
+      );
+      const ruleIds = new Set(this.plugin.settings.rules.map((r) => r.id));
+      this.plugin.settings.pipeline =
+        this.plugin.settings.pipeline.filter((s) => ruleIds.has(s.ruleId));
+      await this.plugin.saveSettings();
+      this.plugin.initProviders();
+      this.display();
+    });
+
+    // ── Content area ──
+    const content = row.createSpan({ cls: "mobile-option-setting-item-name" });
+
     if (isAuthed) {
       // ─── Compact view after auth ───
-      const wrapper = containerEl.createDiv({ cls: "multisync-account-row" });
-      
+      const wrapper = content.createDiv({ cls: "multisync-account-row" });
+
       // Clickable label → editable on click
       const nameEl = wrapper.createEl("span", {
         text: `✓ ${account.name}`,
@@ -199,7 +215,7 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
       nameEl.style.marginRight = "8px";
       nameEl.title = "Click to rename";
 
-      const descEl = wrapper.createEl("span", {
+      wrapper.createEl("span", {
         text: ` (${typeLabel})`,
         cls: "setting-item-description",
       });
@@ -208,7 +224,6 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
         nameEl.contentEditable = "true";
         nameEl.textContent = account.name;
         nameEl.focus();
-        // Select all text
         const range = document.createRange();
         range.selectNodeContents(nameEl);
         const sel = window.getSelection();
@@ -222,7 +237,7 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
         if (newName && newName !== account.name) {
           account.name = newName;
           await this.plugin.saveSettings();
-          this.display(); // refresh to update rule/pipeline labels
+          this.display();
         } else {
           nameEl.textContent = `✓ ${account.name}`;
         }
@@ -239,17 +254,14 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
         }
       });
 
-      const s = new Setting(wrapper)
-        .setDesc("");
+      const s = new Setting(wrapper).setDesc("");
 
-      // Re-authorize
       s.addButton((btn) =>
         btn.setButtonText("Re-authorize").onClick(async () => {
           await this.startOAuthFlow(account);
         })
       );
 
-      // Disconnect
       s.addButton((btn) =>
         btn.setButtonText("Disconnect").setWarning().onClick(async () => {
           account.credentials = {};
@@ -258,30 +270,12 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
           this.display();
         })
       );
-
-      // Delete account
-      s.addButton((btn) =>
-        btn.setButtonText("✕").setWarning().onClick(async () => {
-          this.plugin.settings.accounts =
-            this.plugin.settings.accounts.filter((a) => a.id !== account.id);
-          this.plugin.settings.rules = this.plugin.settings.rules.filter(
-            (r) => r.accountId !== account.id
-          );
-          const ruleIds = new Set(this.plugin.settings.rules.map((r) => r.id));
-          this.plugin.settings.pipeline =
-            this.plugin.settings.pipeline.filter((s) => ruleIds.has(s.ruleId));
-          await this.plugin.saveSettings();
-          this.plugin.initProviders();
-          this.display();
-        })
-      );
     } else {
       // ─── Full setup view before auth ───
-      const s = new Setting(containerEl)
+      const s = new Setting(content)
         .setName(account.name || "New Account")
         .setDesc(`${typeLabel} | Not connected`);
 
-      // Name
       s.addText((text) =>
         text
           .setPlaceholder("Account name")
@@ -292,7 +286,6 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
           })
       );
 
-      // Type dropdown
       s.addDropdown((dd) => {
         for (const ct of CLOUD_TYPES) dd.addOption(ct.value, ct.label);
         dd.setValue(account.type);
@@ -305,37 +298,60 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
         });
       });
 
-      // Credentials (for manual setup or entering app key/client ID)
       s.addButton((btn) =>
         btn.setButtonText("Credentials").onClick(() => {
-          this.renderCredentials(containerEl, account);
+          this.renderCredentials(content, account);
         })
       );
 
-      // Authorize
       s.addButton((btn) =>
         btn.setButtonText("Authorize").setCta().onClick(async () => {
           await this.startOAuthFlow(account);
         })
       );
-
-      // Delete
-      s.addButton((btn) =>
-        btn.setButtonText("✕").setWarning().onClick(async () => {
-          this.plugin.settings.accounts =
-            this.plugin.settings.accounts.filter((a) => a.id !== account.id);
-          this.plugin.settings.rules = this.plugin.settings.rules.filter(
-            (r) => r.accountId !== account.id
-          );
-          const ruleIds = new Set(this.plugin.settings.rules.map((r) => r.id));
-          this.plugin.settings.pipeline =
-            this.plugin.settings.pipeline.filter((s) => ruleIds.has(s.ruleId));
-          await this.plugin.saveSettings();
-          this.plugin.initProviders();
-          this.display();
-        })
-      );
     }
+  }
+
+  private renderAddAccountRow(containerEl: HTMLElement) {
+    const row = containerEl.createDiv({ cls: "mobile-option-setting-item" });
+    const hiddenIcon = row.createSpan({ cls: "mobile-option-setting-item-remove-icon" });
+    hiddenIcon.style.visibility = "hidden";
+    hiddenIcon.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="svg-icon lucide-minus-circle"><circle cx="12" cy="12" r="10"></circle><line x1="8" y1="12" x2="16" y2="12"></line></svg>`;
+
+    const content = row.createSpan({ cls: "mobile-option-setting-item-name" });
+    let newName = "New Account";
+    let newType: CloudProviderType = "dropbox";
+
+    const s = new Setting(content).setName("Add account");
+
+    s.addText((text) =>
+      text.setPlaceholder("Account name").setValue(newName).onChange((val) => {
+        newName = val;
+      })
+    );
+
+    s.addDropdown((dd) => {
+      for (const ct of CLOUD_TYPES) dd.addOption(ct.value, ct.label);
+      dd.setValue(newType);
+      dd.onChange((val) => {
+        newType = val as CloudProviderType;
+      });
+    });
+
+    s.addButton((btn) =>
+      btn.setButtonText("+").setCta().onClick(async () => {
+        const newAccount: CloudAccount = {
+          id: "account-" + Date.now(),
+          type: newType,
+          name: newName,
+          credentials: {},
+        };
+        this.plugin.settings.accounts.push(newAccount);
+        await this.plugin.saveSettings();
+        this.plugin.initProviders();
+        this.display();
+      })
+    );
   }
 
   private renderCredentials(containerEl: HTMLElement, account: CloudAccount) {
@@ -383,18 +399,51 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
     }
   }
 
+  /* ------------------------------------------------------------------ */
+  /*  Rules                                                              */
+  /* ------------------------------------------------------------------ */
+
   private renderRule(containerEl: HTMLElement, rule: SyncRule) {
     const account = this.plugin.settings.accounts.find(
       (a) => a.id === rule.accountId
     );
     const localLabel = rule.localFolder || "(entire vault)";
     const cloudLabel = rule.cloudFolder || "(drive root)";
-    const s = new Setting(containerEl)
-      .setName(`${account?.name || "?"} : ${cloudLabel} ↔ ${localLabel}`)
-      .setDesc(`Rule: ${rule.id}`);
+
+    const row = containerEl.createDiv({ cls: "mobile-option-setting-item" });
+
+    // ── Remove icon (cascade delete) ──
+    this.createRemoveIcon(row, async () => {
+      this.plugin.settings.rules =
+        this.plugin.settings.rules.filter((r) => r.id !== rule.id);
+      this.plugin.settings.pipeline =
+        this.plugin.settings.pipeline.filter((s) => s.ruleId !== rule.id);
+      delete this.plugin.settings.snapshots[rule.id];
+      await this.plugin.saveSettings();
+      this.display();
+    });
+
+    // ── Clickable name ──
+    const nameSpan = row.createSpan({ cls: "mobile-option-setting-item-name" });
+    nameSpan.textContent = `${account?.name || "?"}: ${cloudLabel} ↔ ${localLabel}`;
+    nameSpan.style.cursor = "pointer";
+
+    // ── Expand / collapse edit area ──
+    const editDiv = containerEl.createDiv({ cls: "multisync-rule-edit" });
+    editDiv.style.display = this.expandedRules.has(rule.id) ? "" : "none";
+
+    nameSpan.addEventListener("click", () => {
+      if (this.expandedRules.has(rule.id)) {
+        this.expandedRules.delete(rule.id);
+        editDiv.style.display = "none";
+      } else {
+        this.expandedRules.add(rule.id);
+        editDiv.style.display = "";
+      }
+    });
 
     // Account dropdown
-    s.addDropdown((dd) => {
+    new Setting(editDiv).setName("Account").addDropdown((dd) => {
       for (const a of this.plugin.settings.accounts) {
         dd.addOption(a.id, a.name);
       }
@@ -407,19 +456,18 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
     });
 
     // Cloud folder
-    s.addText((text) => {
+    new Setting(editDiv).setName("Cloud folder").addText((text) => {
       text
         .setPlaceholder("Cloud folder, e.g. Documents/notes")
         .setValue(rule.cloudFolder)
         .onChange(async (val) => {
-          // Auto-strip leading slash for UX
           rule.cloudFolder = val.replace(/^\/+/, "");
           await this.plugin.saveSettings();
         });
     });
 
     // Local folder (with suggest dropdown)
-    s.addSearch((search) => {
+    new Setting(editDiv).setName("Local folder").addSearch((search) => {
       search
         .setPlaceholder("Type to search vault folders...")
         .setValue(rule.localFolder || "(entire vault)")
@@ -429,39 +477,150 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
         });
       new FolderSuggest(this.app, search.inputEl);
     });
+  }
 
-    // Delete rule
+  private renderAddRuleRow(containerEl: HTMLElement) {
+    const row = containerEl.createDiv({ cls: "mobile-option-setting-item" });
+    const hiddenIcon = row.createSpan({ cls: "mobile-option-setting-item-remove-icon" });
+    hiddenIcon.style.visibility = "hidden";
+    hiddenIcon.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="svg-icon lucide-minus-circle"><circle cx="12" cy="12" r="10"></circle><line x1="8" y1="12" x2="16" y2="12"></line></svg>`;
+
+    const content = row.createSpan({ cls: "mobile-option-setting-item-name" });
+
+    let newAccountId = this.plugin.settings.accounts[0]?.id || "";
+    let newCloudFolder = "";
+    let newLocalFolder = "";
+
+    const s = new Setting(content).setName("Add rule");
+
+    s.addDropdown((dd) => {
+      for (const a of this.plugin.settings.accounts) {
+        dd.addOption(a.id, a.name);
+      }
+      if (newAccountId) dd.setValue(newAccountId);
+      dd.onChange((val) => {
+        newAccountId = val;
+      });
+    });
+
+    s.addText((text) =>
+      text.setPlaceholder("Cloud folder").onChange((val) => {
+        newCloudFolder = val.replace(/^\/+/, "");
+      })
+    );
+
+    s.addSearch((search) => {
+      search
+        .setPlaceholder("Local folder")
+        .onChange((val) => {
+          newLocalFolder = val === "(entire vault)" ? "" : val.replace(/^\/+/, "");
+        });
+      new FolderSuggest(this.app, search.inputEl);
+    });
+
     s.addButton((btn) =>
-      btn
-        .setButtonText("✕")
-        .setWarning()
-        .onClick(async () => {
-          this.plugin.settings.rules =
-            this.plugin.settings.rules.filter((r) => r.id !== rule.id);
-          this.plugin.settings.pipeline =
-            this.plugin.settings.pipeline.filter((s) => s.ruleId !== rule.id);
-          delete this.plugin.settings.snapshots[rule.id];
-          await this.plugin.saveSettings();
-          this.display();
-        })
+      btn.setButtonText("+").setCta().onClick(async () => {
+        const newRule: SyncRule = {
+          id: "rule-" + Date.now(),
+          accountId: newAccountId,
+          cloudFolder: newCloudFolder,
+          localFolder: newLocalFolder,
+        };
+        this.plugin.settings.rules.push(newRule);
+        await this.plugin.saveSettings();
+        this.display();
+      })
     );
   }
 
-  private renderPipelineStep(containerEl: HTMLElement, index: number) {
+  /* ------------------------------------------------------------------ */
+  /*  Pipeline                                                           */
+  /* ------------------------------------------------------------------ */
+
+  private renderPipelineStep(pipelineContainer: HTMLElement, index: number) {
     const step = this.plugin.settings.pipeline[index];
     const rule = this.plugin.settings.rules.find((r) => r.id === step.ruleId);
     const account = rule
       ? this.plugin.settings.accounts.find((a) => a.id === rule.accountId)
       : null;
+    const opLabel = ALL_OPS.find((o) => o.value === step.operation)?.label || step.operation;
 
-    const label = `#${index + 1}: ${account?.name || "?"} → ${step.operation}`;
-    const s = new Setting(containerEl).setName(label);
+    const row = pipelineContainer.createDiv({ cls: "mobile-option-setting-item" });
+
+    // ── Remove icon ──
+    this.createRemoveIcon(row, async () => {
+      this.plugin.settings.pipeline.splice(index, 1);
+      this.expandedSteps.clear();
+      await this.plugin.saveSettings();
+      this.display();
+    });
+
+    // ── Step number icon ──
+    const numSpan = row.createSpan({ cls: "mobile-option-setting-item-option-icon" });
+    numSpan.textContent = `#${index + 1}`;
+
+    // ── Step label (clickable) ──
+    const nameSpan = row.createSpan({ cls: "mobile-option-setting-item-name" });
+    nameSpan.textContent = `${account?.name || "?"} → ${opLabel}`;
+    nameSpan.style.cursor = "pointer";
+
+    // ── Drag handle ──
+    const handle = this.createDragIcon(row);
+
+    // Drag-and-drop events on the handle
+    handle.addEventListener("dragstart", (e) => {
+      this.dragSourceIndex = index;
+      e.dataTransfer?.setData("text/plain", String(index));
+      row.classList.add("is-dragging");
+    });
+    handle.addEventListener("dragend", () => {
+      row.classList.remove("is-dragging");
+      pipelineContainer.querySelectorAll(".drag-over").forEach((el) => el.classList.remove("drag-over"));
+    });
+
+    // Drop target events on the row
+    row.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      pipelineContainer.querySelectorAll(".drag-over").forEach((el) => el.classList.remove("drag-over"));
+      row.classList.add("drag-over");
+    });
+    row.addEventListener("dragleave", () => {
+      row.classList.remove("drag-over");
+    });
+    row.addEventListener("drop", async (e) => {
+      e.preventDefault();
+      row.classList.remove("drag-over");
+      const from = this.dragSourceIndex;
+      const to = index;
+      if (from !== to && from >= 0) {
+        const arr = this.plugin.settings.pipeline;
+        const [moved] = arr.splice(from, 1);
+        arr.splice(to, 0, moved);
+        this.expandedSteps.clear();
+        await this.plugin.saveSettings();
+        this.display();
+      }
+    });
+
+    // ── Expand / collapse edit area ──
+    const editDiv = pipelineContainer.createDiv({ cls: "multisync-step-edit" });
+    editDiv.style.display = this.expandedSteps.has(index) ? "" : "none";
+
+    nameSpan.addEventListener("click", () => {
+      if (this.expandedSteps.has(index)) {
+        this.expandedSteps.delete(index);
+        editDiv.style.display = "none";
+      } else {
+        this.expandedSteps.add(index);
+        editDiv.style.display = "";
+      }
+    });
 
     // Rule dropdown
-    s.addDropdown((dd) => {
+    new Setting(editDiv).setName("Rule").addDropdown((dd) => {
       for (const r of this.plugin.settings.rules) {
         const a = this.plugin.settings.accounts.find(
-          (a) => a.id === r.accountId
+          (acc) => acc.id === r.accountId
         );
         dd.addOption(r.id, `${a?.name || "?"}: ${r.cloudFolder} ↔ ${r.localFolder}`);
       }
@@ -474,7 +633,7 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
     });
 
     // Operation dropdown
-    s.addDropdown((dd) => {
+    new Setting(editDiv).setName("Operation").addDropdown((dd) => {
       for (const op of ALL_OPS) dd.addOption(op.value, op.label);
       dd.setValue(step.operation);
       dd.onChange(async (val) => {
@@ -483,43 +642,52 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
         this.display();
       });
     });
+  }
 
-    // Move up
-    s.addButton((btn) =>
-      btn
-        .setButtonText("↑")
-        .setDisabled(index === 0)
-        .onClick(async () => {
-          const arr = this.plugin.settings.pipeline;
-          [arr[index - 1], arr[index]] = [arr[index], arr[index - 1]];
-          await this.plugin.saveSettings();
-          this.display();
-        })
-    );
+  private renderAddPipelineRow(pipelineContainer: HTMLElement) {
+    const row = pipelineContainer.createDiv({ cls: "mobile-option-setting-item" });
+    const hiddenIcon = row.createSpan({ cls: "mobile-option-setting-item-remove-icon" });
+    hiddenIcon.style.visibility = "hidden";
+    hiddenIcon.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="svg-icon lucide-minus-circle"><circle cx="12" cy="12" r="10"></circle><line x1="8" y1="12" x2="16" y2="12"></line></svg>`;
 
-    // Move down
-    s.addButton((btn) =>
-      btn
-        .setButtonText("↓")
-        .setDisabled(index === this.plugin.settings.pipeline.length - 1)
-        .onClick(async () => {
-          const arr = this.plugin.settings.pipeline;
-          [arr[index], arr[index + 1]] = [arr[index + 1], arr[index]];
-          await this.plugin.saveSettings();
-          this.display();
-        })
-    );
+    const content = row.createSpan({ cls: "mobile-option-setting-item-name" });
 
-    // Delete step
+    let newRuleId = this.plugin.settings.rules[0]?.id || "";
+    let newOp: SyncOpType = "cloud-update";
+
+    const s = new Setting(content).setName("Add step");
+
+    s.addDropdown((dd) => {
+      for (const r of this.plugin.settings.rules) {
+        const a = this.plugin.settings.accounts.find(
+          (acc) => acc.id === r.accountId
+        );
+        dd.addOption(r.id, `${a?.name || "?"}: ${r.cloudFolder} ↔ ${r.localFolder}`);
+      }
+      if (newRuleId) dd.setValue(newRuleId);
+      dd.onChange((val) => {
+        newRuleId = val;
+      });
+    });
+
+    s.addDropdown((dd) => {
+      for (const op of ALL_OPS) dd.addOption(op.value, op.label);
+      dd.setValue(newOp);
+      dd.onChange((val) => {
+        newOp = val as SyncOpType;
+      });
+    });
+
     s.addButton((btn) =>
-      btn
-        .setButtonText("✕")
-        .setWarning()
-        .onClick(async () => {
-          this.plugin.settings.pipeline.splice(index, 1);
-          await this.plugin.saveSettings();
-          this.display();
-        })
+      btn.setButtonText("+").setCta().onClick(async () => {
+        const newStep: SyncStep = {
+          ruleId: newRuleId,
+          operation: newOp,
+        };
+        this.plugin.settings.pipeline.push(newStep);
+        await this.plugin.saveSettings();
+        this.display();
+      })
     );
   }
 
