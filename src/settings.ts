@@ -53,74 +53,59 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
     containerEl.empty();
 
     // ─── Cloud Accounts ───
-    containerEl.createEl("h2", { text: "Cloud Accounts" });
+    this.renderSectionHeader(containerEl, "Cloud Accounts", "+ Add", async () => {
+      const newAccount: CloudAccount = {
+        id: "account-" + Date.now(),
+        type: "dropbox",
+        name: "New Account",
+        credentials: {},
+      };
+      this.plugin.settings.accounts.push(newAccount);
+      await this.plugin.saveSettings();
+      this.plugin.initProviders();
+      this.display();
+    });
 
     for (const account of this.plugin.settings.accounts) {
       this.renderAccount(containerEl, account);
     }
 
-    new Setting(containerEl).addButton((btn) =>
-      btn.setButtonText("+ Add Account").onClick(async () => {
-        const newAccount: CloudAccount = {
-          id: "account-" + Date.now(),
-          type: "dropbox",
-          name: "New Account",
-          credentials: {},
-        };
-        this.plugin.settings.accounts.push(newAccount);
-        await this.plugin.saveSettings();
-        this.plugin.initProviders();
-        this.display();
-      })
-    );
-
     // ─── Sync Rules ───
-    containerEl.createEl("h2", { text: "Sync Rules" });
-    containerEl.createEl("p", {
-      text: "Map a cloud account + cloud folder ↔ local vault folder.",
-      cls: "setting-item-description",
+    this.renderSectionHeader(containerEl, "Sync Rules", "+ Add", async () => {
+      const newRule: SyncRule = {
+        id: "rule-" + Date.now(),
+        accountId: this.plugin.settings.accounts[0]?.id || "",
+        cloudFolder: "",
+        localFolder: "",
+      };
+      this.plugin.settings.rules.push(newRule);
+      await this.plugin.saveSettings();
+      this.display();
     });
 
     for (const rule of this.plugin.settings.rules) {
       this.renderRule(containerEl, rule);
     }
 
-    new Setting(containerEl).addButton((btn) =>
-      btn.setButtonText("+ Add Rule").onClick(async () => {
-        const newRule: SyncRule = {
-          id: "rule-" + Date.now(),
-          accountId: this.plugin.settings.accounts[0]?.id || "",
-          cloudFolder: "/",
-          localFolder: "",
-        };
-        this.plugin.settings.rules.push(newRule);
-        await this.plugin.saveSettings();
-        this.display();
-      })
-    );
-
     // ─── Pipeline ───
-    containerEl.createEl("h2", { text: "Sync Pipeline" });
+    this.renderSectionHeader(containerEl, "Sync Pipeline", "+ Add Step", async () => {
+      const newStep: SyncStep = {
+        ruleId: this.plugin.settings.rules[0]?.id || "",
+        operation: "cloud-update",
+      };
+      this.plugin.settings.pipeline.push(newStep);
+      await this.plugin.saveSettings();
+      this.display();
+    });
+
     containerEl.createEl("p", {
-      text: "Define the order of operations. Each step = Rule + Operation. Drag to reorder (or use ↑↓ buttons).",
+      text: "Define the order of operations. Each step = Rule + Operation.",
       cls: "setting-item-description",
     });
 
     for (let i = 0; i < this.plugin.settings.pipeline.length; i++) {
       this.renderPipelineStep(containerEl, i);
     }
-
-    new Setting(containerEl).addButton((btn) =>
-      btn.setButtonText("+ Add Step").onClick(async () => {
-        const newStep: SyncStep = {
-          ruleId: this.plugin.settings.rules[0]?.id || "",
-          operation: "cloud-update",
-        };
-        this.plugin.settings.pipeline.push(newStep);
-        await this.plugin.saveSettings();
-        this.display();
-      })
-    );
 
     // ─── Quick Pipeline Generator ───
     containerEl.createEl("h2", { text: "Quick Generate Pipeline" });
@@ -174,6 +159,26 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
             await this.plugin.runSync(true);
           })
       );
+  }
+
+  /** Render section header with an inline add button aligned right */
+  private renderSectionHeader(
+    containerEl: HTMLElement,
+    title: string,
+    buttonText: string,
+    onClick: () => Promise<void>
+  ) {
+    const header = containerEl.createDiv({ cls: "multisync-section-header" });
+    header.style.display = "flex";
+    header.style.alignItems = "center";
+    header.style.justifyContent = "space-between";
+    header.style.marginTop = "1.5em";
+    header.style.marginBottom = "0.5em";
+    header.createEl("h2", { text: title });
+    const btn = header.createEl("button", { text: buttonText, cls: "mod-cta" });
+    btn.style.fontSize = "0.85em";
+    btn.style.padding = "4px 12px";
+    btn.addEventListener("click", onClick);
   }
 
   private renderAccount(containerEl: HTMLElement, account: CloudAccount) {
