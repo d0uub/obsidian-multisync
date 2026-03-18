@@ -1,0 +1,11 @@
+/* MultiSync plugin styles */
+
+/* Spinning animation for ribbon icon during sync */
+.multisync-spin svg {
+  animation: multisync-rotate 1s linear infinite;
+}
+
+@keyframes multisync-rotate {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}

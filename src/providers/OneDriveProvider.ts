@@ -29,8 +29,21 @@ export class OneDriveProvider implements ICloudProvider {
     this.onTokenRefreshed = onTokenRefreshed;
   }
 
+  private refreshPromise: Promise<void> | null = null;
+
   private async ensureToken(): Promise<void> {
     if (Date.now() < this.tokenExpiry - 60000) return;
+    // Serialize concurrent refresh attempts
+    if (this.refreshPromise) return this.refreshPromise;
+    this.refreshPromise = this.doRefreshToken();
+    try {
+      await this.refreshPromise;
+    } finally {
+      this.refreshPromise = null;
+    }
+  }
+
+  private async doRefreshToken(): Promise<void> {
     const resp = await requestUrl({
       url: "https://login.microsoftonline.com/common/oauth2/v2.0/token",
       method: "POST",
@@ -49,51 +62,103 @@ export class OneDriveProvider implements ICloudProvider {
     this.onTokenRefreshed?.(this.accessToken, this.refreshToken, this.tokenExpiry);
   }
 
+  /** Retry wrapper for Graph API calls with exponential backoff on 429/503 */
+  private async withRetry<T>(fn: () => Promise<T>, maxRetries = 3): Promise<T> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await fn();
+      } catch (e: any) {
+        const status = e?.status || (e?.message?.match(/status (\d+)/)?.[1] && parseInt(e.message.match(/status (\d+)/)[1]));
+        if ((status === 429 || status === 503) && attempt < maxRetries) {
+          // Retry-After header or exponential backoff
+          const delay = Math.min(1000 * Math.pow(2, attempt), 10000);
+          await new Promise(r => setTimeout(r, delay));
+          continue;
+        }
+        throw e;
+      }
+    }
+  }
+
   private async graphGet(path: string): Promise<any> {
     await this.ensureToken();
-    const resp = await requestUrl({
-      url: `https://graph.microsoft.com/v1.0${path}`,
-      method: "GET",
-      headers: { Authorization: `Bearer ${this.accessToken}` },
+    return this.withRetry(async () => {
+      const resp = await requestUrl({
+        url: `https://graph.microsoft.com/v1.0${path}`,
+        method: "GET",
+        headers: { Authorization: `Bearer ${this.accessToken}` },
+      });
+      return resp.json;
     });
-    return resp.json;
   }
 
   private async graphPut(path: string, content: ArrayBuffer): Promise<any> {
     await this.ensureToken();
-    const resp = await requestUrl({
-      url: `https://graph.microsoft.com/v1.0${path}`,
-      method: "PUT",
-      headers: {
-        Authorization: `Bearer ${this.accessToken}`,
-        "Content-Type": "application/octet-stream",
-      },
-      body: content,
+    return this.withRetry(async () => {
+      const resp = await requestUrl({
+        url: `https://graph.microsoft.com/v1.0${path}`,
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${this.accessToken}`,
+          "Content-Type": "application/octet-stream",
+        },
+        body: content,
+      });
+      return resp.json;
     });
-    return resp.json;
   }
 
   private async graphDelete(path: string): Promise<void> {
     await this.ensureToken();
-    await requestUrl({
-      url: `https://graph.microsoft.com/v1.0${path}`,
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${this.accessToken}` },
+    await this.withRetry(async () => {
+      await requestUrl({
+        url: `https://graph.microsoft.com/v1.0${path}`,
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${this.accessToken}` },
+      });
     });
   }
 
   private async graphPost(path: string, body: Record<string, unknown>): Promise<any> {
     await this.ensureToken();
-    const resp = await requestUrl({
-      url: `https://graph.microsoft.com/v1.0${path}`,
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${this.accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
+    return this.withRetry(async () => {
+      const resp = await requestUrl({
+        url: `https://graph.microsoft.com/v1.0${path}`,
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+      return resp.json;
     });
-    return resp.json;
+  }
+
+  private async graphPatch(path: string, body: Record<string, unknown>): Promise<any> {
+    await this.ensureToken();
+    return this.withRetry(async () => {
+      const resp = await requestUrl({
+        url: `https://graph.microsoft.com/v1.0${path}`,
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${this.accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+      return resp.json;
+    });
+  }
+
+  /** Ensure a cloud path always starts with / for Graph API */
+  private ensureLeadingSlash(p: string): string {
+    return p.startsWith("/") ? p : "/" + p;
+  }
+
+  /** Percent-encode each segment of a cloud path for Graph API (spaces, #, %, etc.) */
+  private encodeGraphPath(p: string): string {
+    return p.split("/").map(seg => encodeURIComponent(seg)).join("/");
   }
 
   private encodePath(cloudFolder: string, relativePath?: string): string {
@@ -101,7 +166,7 @@ export class OneDriveProvider implements ICloudProvider {
       ? joinCloudPath(cloudFolder, relativePath)
       : cloudFolder;
     if (full === "/" || full === "") return "/me/drive/root";
-    return `/me/drive/root:${full}`;
+    return `/me/drive/root:${this.encodeGraphPath(this.ensureLeadingSlash(full))}`;
   }
 
   async listFiles(cloudFolder: string): Promise<FileEntry[]> {
@@ -109,7 +174,7 @@ export class OneDriveProvider implements ICloudProvider {
     const driveItemPath =
       cloudFolder === "/" || cloudFolder === ""
         ? "/me/drive/root"
-        : `/me/drive/root:${cloudFolder}:`;
+        : `/me/drive/root:${this.encodeGraphPath(this.ensureLeadingSlash(cloudFolder))}:`;
 
     // Recursive listing via /children
     const recurse = async (apiPath: string, prefix: string) => {
@@ -154,30 +219,34 @@ export class OneDriveProvider implements ICloudProvider {
     const url = pathOrUrl.startsWith("http")
       ? pathOrUrl
       : `https://graph.microsoft.com/v1.0${pathOrUrl}`;
-    const resp = await requestUrl({
-      url,
-      method: "GET",
-      headers: { Authorization: `Bearer ${this.accessToken}` },
+    return this.withRetry(async () => {
+      const resp = await requestUrl({
+        url,
+        method: "GET",
+        headers: { Authorization: `Bearer ${this.accessToken}` },
+      });
+      return resp.json;
     });
-    return resp.json;
   }
 
   async readFile(cloudFolder: string, relativePath: string): Promise<ArrayBuffer> {
     const itemPath = this.encodePath(cloudFolder, relativePath);
     await this.ensureToken();
-    const resp = await requestUrl({
-      url: `https://graph.microsoft.com/v1.0${itemPath}:/content`,
-      method: "GET",
-      headers: { Authorization: `Bearer ${this.accessToken}` },
+    return this.withRetry(async () => {
+      const resp = await requestUrl({
+        url: `https://graph.microsoft.com/v1.0${itemPath}:/content`,
+        method: "GET",
+        headers: { Authorization: `Bearer ${this.accessToken}` },
+      });
+      return resp.arrayBuffer;
     });
-    return resp.arrayBuffer;
   }
 
   async writeFile(
     cloudFolder: string,
     relativePath: string,
     content: ArrayBuffer,
-    _mtime: number
+    mtime: number
   ): Promise<void> {
     const fullPath = joinCloudPath(cloudFolder, relativePath);
     // Ensure parent folders exist
@@ -186,7 +255,7 @@ export class OneDriveProvider implements ICloudProvider {
       const parentParts = parts.slice(0, -1);
       let currentPath = "";
       for (const part of parentParts) {
-        const parentOfCurrent = currentPath === "" ? "/me/drive/root" : `/me/drive/root:/${currentPath}:`;
+        const parentOfCurrent = currentPath === "" ? "/me/drive/root" : `/me/drive/root:/${this.encodeGraphPath(currentPath)}:`;
         try {
           await this.graphPost(`${parentOfCurrent}/children`, {
             name: part,
@@ -198,12 +267,23 @@ export class OneDriveProvider implements ICloudProvider {
       }
     }
     // For files < 4MB, use simple upload
-    await this.graphPut(`/me/drive/root:${fullPath}:/content`, content);
+    const itemPath = `/me/drive/root:${this.encodeGraphPath(this.ensureLeadingSlash(fullPath))}:`;
+    await this.graphPut(`${itemPath}/content`, content);
+    // Set file modification time to match local source
+    if (mtime > 0) {
+      try {
+        await this.graphPatch(itemPath, {
+          fileSystemInfo: {
+            lastModifiedDateTime: new Date(mtime).toISOString(),
+          },
+        });
+      } catch { /* mtime patch failed silently */ }
+    }
   }
 
   async deleteFile(cloudFolder: string, relativePath: string): Promise<void> {
     const fullPath = joinCloudPath(cloudFolder, relativePath);
-    await this.graphDelete(`/me/drive/root:${fullPath}:`);
+    await this.graphDelete(`/me/drive/root:${this.encodeGraphPath(this.ensureLeadingSlash(fullPath))}:`);
   }
 
   async mkdir(cloudFolder: string, relativePath: string): Promise<void> {
@@ -213,7 +293,7 @@ export class OneDriveProvider implements ICloudProvider {
     const parent =
       parts.length === 0
         ? "/me/drive/root"
-        : `/me/drive/root:/${parts.join("/")}:`;
+        : `/me/drive/root:/${this.encodeGraphPath(parts.join("/"))}:`;
     try {
       await this.graphPost(`${parent}/children`, {
         name: folderName,
@@ -231,7 +311,7 @@ export class OneDriveProvider implements ICloudProvider {
     const fullPath = joinCloudPath(cloudFolder, relativePath);
     try {
       const data = await this.graphGet(
-        `/me/drive/root:${fullPath}:?$select=name,size,lastModifiedDateTime,folder,file`
+        `/me/drive/root:${this.encodeGraphPath(this.ensureLeadingSlash(fullPath))}:?$select=name,size,lastModifiedDateTime,folder,file`
       );
       return {
         path: relativePath,
@@ -252,6 +332,70 @@ export class OneDriveProvider implements ICloudProvider {
     } catch {
       return false;
     }
+  }
+
+  async getDeletedItems(cloudFolder: string, deltaToken: string): Promise<{ deleted: string[]; newDeltaToken: string }> {
+    const prefix = (cloudFolder === "/" || cloudFolder === "")
+      ? ""
+      : (cloudFolder.startsWith("/") ? cloudFolder.substring(1) : cloudFolder) + "/";
+
+    const deleted: string[] = [];
+    let newDeltaToken = deltaToken;
+
+    try {
+      // First call: get current deltaLink without enumerating (skip existing state)
+      // Subsequent calls: use stored deltaLink to get changes since last sync
+      let url: string;
+      if (!deltaToken) {
+        // First run — get "latest" token to establish baseline (no deletes on first sync)
+        url = "/me/drive/root/delta?token=latest";
+      } else {
+        // Use stored delta link (may be full URL or token)
+        url = deltaToken.startsWith("/")
+          ? deltaToken
+          : `/me/drive/root/delta(token='${deltaToken}')`;
+      }
+
+      while (url) {
+        const data = await this.graphGetRaw(url);
+        // Only process items if we have a previous token (not first run)
+        if (deltaToken) {
+          for (const item of data.value || []) {
+            if (!item.deleted) continue;
+            // Reconstruct the original path from parentReference
+            const parentPath = item.parentReference?.path || "";
+            const rootPrefix = "/drive/root:";
+            let itemFolder = "";
+            if (parentPath.includes(rootPrefix)) {
+              itemFolder = parentPath.substring(parentPath.indexOf(rootPrefix) + rootPrefix.length);
+              if (itemFolder.startsWith("/")) itemFolder = itemFolder.substring(1);
+            }
+            const fullPath = itemFolder ? `${itemFolder}/${item.name}` : item.name;
+
+            // Filter to items under our cloudFolder
+            if (prefix && !fullPath.startsWith(prefix)) continue;
+            const relativePath = prefix ? fullPath.substring(prefix.length) : fullPath;
+            if (relativePath) deleted.push(relativePath);
+          }
+        }
+
+        if (data["@odata.deltaLink"]) {
+          // Extract token or store the relative URL
+          const link = data["@odata.deltaLink"] as string;
+          newDeltaToken = link.replace("https://graph.microsoft.com/v1.0", "");
+          url = "";
+        } else if (data["@odata.nextLink"]) {
+          url = (data["@odata.nextLink"] as string).replace("https://graph.microsoft.com/v1.0", "");
+        } else {
+          url = "";
+        }
+      }
+    } catch (e) {
+      // If token is stale (410 Gone), reset and return empty — next sync will re-baseline
+      console.warn("MultiSync: delta query failed, resetting token", e);
+      newDeltaToken = "";
+    }
+    return { deleted, newDeltaToken };
   }
 
   async getDisplayName(): Promise<string> {

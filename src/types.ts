@@ -43,13 +43,13 @@ export interface SyncRule {
 }
 
 /**
- * The 5 independent sync operations.
- * - local-update:  file changed locally, push newer version to cloud
- * - cloud-update:  file changed on cloud, pull newer version to local
- * - local-add:     new file in local (not in snapshot) → push to cloud
- * - cloud-add:     new file in cloud (not in snapshot) → pull to local
- * - local-delete:  file deleted locally (was in snapshot) → delete from cloud
- * - cloud-delete:  file deleted on cloud (was in snapshot) → delete from local
+ * The 6 sync operations.
+ * - local-update:  file changed locally → push newer version to cloud
+ * - cloud-update:  file changed on cloud → pull newer version to local
+ * - local-add:     file exists locally but not on cloud → push to cloud
+ * - cloud-add:     file exists on cloud but not locally → pull to local
+ * - local-delete:  user deleted file locally (tracked by vault event) → delete from cloud
+ * - cloud-delete:  file deleted on cloud (detected via cloud API) → trash locally
  */
 export type SyncOpType =
   | "local-update"
@@ -76,22 +76,28 @@ export interface SyncAction {
   sourceEntry?: FileEntry;
 }
 
-/** Snapshot = record of file states after last successful sync, keyed by path */
-export type Snapshot = Record<string, FileEntry>;
-
 /** Plugin settings persisted to data.json */
 export interface MultiSyncSettings {
   accounts: CloudAccount[];
   rules: SyncRule[];
-  /** User-defined pipeline ordering */
+  /** User-defined pipeline ordering (advanced mode) */
   pipeline: SyncStep[];
-  /** Snapshots per sync rule ID */
-  snapshots: Record<string, Snapshot>;
+  /** Files deleted locally, pending deletion from cloud. Keyed by ruleId */
+  pendingCloudDeletes: Record<string, { path: string; deletedAt: number }[]>;
+  /** Delta tokens for incremental cloud change tracking. Keyed by accountId */
+  deltaTokens: Record<string, string>;
+  /** Use advanced pipeline mode instead of standard order */
+  advancedMode: boolean;
+  /** Max concurrent file transfers (1-10, default 4) */
+  concurrency: number;
 }
 
 export const DEFAULT_SETTINGS: MultiSyncSettings = {
   accounts: [],
   rules: [],
   pipeline: [],
-  snapshots: {},
+  pendingCloudDeletes: {},
+  deltaTokens: {},
+  advancedMode: false,
+  concurrency: 4,
 };

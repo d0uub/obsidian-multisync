@@ -4,46 +4,34 @@ import type {
   SyncAction,
   SyncStep,
   SyncRule,
-  CloudAccount,
-  Snapshot,
   MultiSyncSettings,
 } from "../types";
 import type { ICloudProvider } from "../providers/ICloudProvider";
 import { OPERATION_DETECTORS } from "./operations";
-import { buildMergedSnapshot } from "./snapshot";
 import { normalizePath } from "../utils/helpers";
 
 /**
  * SyncPipeline orchestrator.
  * Executes an ordered array of SyncStep (ruleId + operation).
- * Cloud + Operation = 2D matrix, user controls ordering.
+ * Uses event-driven delete tracking instead of snapshots.
  */
 
 export interface PipelineContext {
   app: App;
   settings: MultiSyncSettings;
-  providers: Map<string, ICloudProvider>; // accountId → provider
-  /** Callback to persist updated settings (snapshots) */
+  providers: Map<string, ICloudProvider>;
+  /** Callback to persist settings */
   saveSettings: () => Promise<void>;
-  /** Progress callback */
   onProgress?: (msg: string) => void;
-  /** Called when an action is about to execute */
   onAction?: (action: SyncAction, step: SyncStep) => void;
-  /** If true, only detect actions but don't execute them */
   dryRun?: boolean;
 }
 
-/** Cache for file lists so we don't re-fetch per operation */
 interface ListCache {
   cloudList: FileEntry[];
   localList: FileEntry[];
 }
 
-/**
- * Run the full sync pipeline.
- * Each SyncStep is executed in order. Multiple operations on the same rule
- * share cached file lists (fetched once).
- */
 export async function runPipeline(
   steps: SyncStep[],
   ctx: PipelineContext
@@ -55,88 +43,83 @@ export async function runPipeline(
   for (const step of steps) {
     try {
       const rule = ctx.settings.rules.find((r) => r.id === step.ruleId);
-      if (!rule) {
-        errors.push(`Rule not found: ${step.ruleId}`);
-        continue;
-      }
+      if (!rule) { errors.push(`Rule not found: ${step.ruleId}`); continue; }
 
       const account = ctx.settings.accounts.find((a) => a.id === rule.accountId);
-      if (!account) {
-        errors.push(`Account not found: ${rule.accountId}`);
-        continue;
-      }
+      if (!account) { errors.push(`Account not found: ${rule.accountId}`); continue; }
 
       const provider = ctx.providers.get(account.id);
-      if (!provider) {
-        errors.push(`Provider not initialized for account: ${account.name}`);
-        continue;
-      }
+      if (!provider) { errors.push(`Provider not initialized for account: ${account.name}`); continue; }
 
-      // Get or fetch file lists
       const cache = await getOrFetchLists(rule, provider, ctx, listCaches);
-      const snapshot = ctx.settings.snapshots[rule.id] || {};
+      const pendingDeletes = ctx.settings.pendingCloudDeletes[rule.id] || [];
 
-      // Detect actions for this operation
       const detector = OPERATION_DETECTORS[step.operation];
-      if (!detector) {
-        errors.push(`Unknown operation: ${step.operation}`);
-        continue;
+      if (!detector) { errors.push(`Unknown operation: ${step.operation}`); continue; }
+
+      // For cloud-delete, fetch deleted items from cloud vendor's delta API
+      let cloudDeletedPaths: string[] = [];
+      if (step.operation === "cloud-delete") {
+        const deltaToken = ctx.settings.deltaTokens?.[account.id] || "";
+        const result = await provider.getDeletedItems(rule.cloudFolder, deltaToken);
+        cloudDeletedPaths = result.deleted;
+        // Persist the new delta token for next sync
+        if (!ctx.settings.deltaTokens) ctx.settings.deltaTokens = {};
+        ctx.settings.deltaTokens[account.id] = result.newDeltaToken;
+        await ctx.saveSettings();
       }
 
-      const actions = detector(cache.cloudList, cache.localList, snapshot);
-      ctx.onProgress?.(
-        `[${rule.id}] ${step.operation}: ${actions.length} action(s)`
-      );
+      const actions = detector(cache.cloudList, cache.localList, pendingDeletes, cloudDeletedPaths);
+      ctx.onProgress?.(`[${rule.id}] ${step.operation}: ${actions.length} action(s)`);
 
-      // Execute actions
-      for (const action of actions) {
-        try {
-          ctx.onAction?.(action, step);
-          if (!ctx.dryRun) {
-            await executeAction(action, rule, provider, ctx);
+      // Execute actions concurrently
+      const concurrency = ctx.settings.concurrency || 4;
+      let pendingSaves = 0;
+      let i = 0;
+      const runNext = async (): Promise<void> => {
+        while (i < actions.length) {
+          const action = actions[i++];
+          try {
+            ctx.onAction?.(action, step);
+            if (!ctx.dryRun) {
+              await executeAction(action, rule, provider, ctx);
+              // If this was a local-delete or re-download (from pending), remove from pending list
+              if (step.operation === "local-delete") {
+                const pending = ctx.settings.pendingCloudDeletes[rule.id];
+                if (pending) {
+                  const idx = pending.findIndex(d => d.path === action.path);
+                  if (idx >= 0) pending.splice(idx, 1);
+                }
+              }
+              pendingSaves++;
+              if (pendingSaves >= 20) {
+                pendingSaves = 0;
+                await ctx.saveSettings();
+              }
+            }
+            actionsExecuted++;
+          } catch (e: any) {
+            errors.push(`Failed ${action.operation} ${action.path}: ${e?.message || e}`);
           }
-          actionsExecuted++;
-        } catch (e: any) {
-          errors.push(
-            `Failed ${action.operation} ${action.path}: ${e?.message || e}`
-          );
         }
+      };
+      await Promise.all(Array.from({ length: Math.min(concurrency, actions.length) }, () => runNext()));
+      if (pendingSaves > 0 && !ctx.dryRun) {
+        await ctx.saveSettings();
       }
 
-      // Invalidate cache after write operations (add/update/delete modify file lists)
       if (actions.length > 0 && !ctx.dryRun) {
         listCaches.delete(rule.id);
       }
     } catch (e: any) {
-      errors.push(
-        `Step ${step.ruleId}/${step.operation} failed: ${e?.message || e}`
-      );
+      errors.push(`Step ${step.ruleId}/${step.operation} failed: ${e?.message || e}`);
     }
   }
 
-  // After all steps complete, rebuild and save snapshots (skip in dry-run)
+  // Save settings after all steps
   if (!ctx.dryRun) {
-    const touchedRuleIds = new Set(steps.map((s) => s.ruleId));
-  for (const ruleId of touchedRuleIds) {
-    try {
-      const rule = ctx.settings.rules.find((r) => r.id === ruleId);
-      if (!rule) continue;
-      const account = ctx.settings.accounts.find((a) => a.id === rule.accountId);
-      if (!account) continue;
-      const provider = ctx.providers.get(account.id);
-      if (!provider) continue;
-
-      // Re-fetch fresh lists for snapshot
-      const freshCloud = await provider.listFiles(rule.cloudFolder);
-      const freshLocal = await listLocalFiles(ctx.app, rule.localFolder);
-      ctx.settings.snapshots[ruleId] = buildMergedSnapshot(freshLocal, freshCloud);
-    } catch (e: any) {
-      errors.push(`Snapshot save failed for ${ruleId}: ${e?.message || e}`);
-    }
-    }
-
     await ctx.saveSettings();
-  } // end dry-run guard
+  }
 
   return { actionsExecuted, errors };
 }
@@ -173,7 +156,8 @@ async function executeAction(
       const content = await provider.readFile(rule.cloudFolder, action.path);
       const localPath = toVaultPath(action.path);
       await ensureLocalParentDir(app, localPath);
-      await app.vault.adapter.writeBinary(localPath, content);
+      const mtime = action.sourceEntry?.mtime || Date.now();
+      await app.vault.adapter.writeBinary(localPath, content, { mtime });
       break;
     }
     case "local-add": {
@@ -199,7 +183,8 @@ async function executeAction(
         const content = await provider.readFile(rule.cloudFolder, action.path);
         const localPath = toVaultPath(action.path);
         await ensureLocalParentDir(app, localPath);
-        await app.vault.adapter.writeBinary(localPath, content);
+        const mtime = action.sourceEntry?.mtime || Date.now();
+        await app.vault.adapter.writeBinary(localPath, content, { mtime });
       }
       break;
     }
@@ -209,11 +194,12 @@ async function executeAction(
       break;
     }
     case "cloud-delete": {
-      // Cloud deleted → delete from local
+      // Cloud deleted → move local to trash
       const localPath = toVaultPath(action.path);
       const cleanPath = localPath.replace(/\/$/, "");
-      if (await app.vault.adapter.exists(cleanPath)) {
-        await app.vault.adapter.remove(cleanPath);
+      const abstractFile = ctx.app.vault.getAbstractFileByPath(cleanPath);
+      if (abstractFile) {
+        await ctx.app.vault.trash(abstractFile, true);
       }
       break;
     }

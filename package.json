@@ -2,6 +2,7 @@
   "name": "obsidian-multisync",
   "version": "0.1.0",
   "description": "Multi-cloud folder sync for Obsidian",
+  "author": "d0uub",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",
@@ -14,6 +15,7 @@
     "obsidian": "^1.5.7",
     "tslib": "^2.6.3",
     "typescript": "^5.5.4",
+    "undici": "^7.24.4",
     "vitest": "^4.1.0"
   },
   "dependencies": {

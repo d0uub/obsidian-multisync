@@ -62,6 +62,14 @@ export interface ICloudProvider {
   testConnection(): Promise<boolean>;
 
   /**
+   * Get list of recently deleted file paths from cloud using incremental change tracking.
+   * @param cloudFolder - cloud root folder
+   * @param deltaToken - previous delta token (empty string for first run)
+   * @returns deleted paths relative to cloudFolder + new delta token for next call
+   */
+  getDeletedItems(cloudFolder: string, deltaToken: string): Promise<{ deleted: string[]; newDeltaToken: string }>;
+
+  /**
    * Human-readable display name for this provider instance.
    */
   getDisplayName(): Promise<string>;

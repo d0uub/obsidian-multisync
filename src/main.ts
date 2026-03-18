@@ -27,15 +27,42 @@ export default class MultiSyncPlugin extends Plugin {
   settings!: MultiSyncSettings;
   providers: Map<string, ICloudProvider> = new Map();
   oauth2Info: OAuth2Info = {};
-
+  private ribbonIconEl: HTMLElement | null = null;
+  private statusBarEl: HTMLElement | null = null;
+  private syncing = false;
   async onload() {
     await this.loadSettings();
     this.initProviders();
 
+    // Track local file deletions for syncing to cloud
+    this.registerEvent(
+      this.app.vault.on("delete", (file) => {
+        const filePath = file.path;
+        for (const rule of this.settings.rules) {
+          const prefix = rule.localFolder ? rule.localFolder + "/" : "";
+          if (prefix && !filePath.startsWith(prefix)) continue;
+          if (!prefix && filePath.startsWith(".")) continue; // skip hidden files at root
+          const relativePath = prefix ? filePath.substring(prefix.length) : filePath;
+          if (!relativePath) continue;
+          if (!this.settings.pendingCloudDeletes[rule.id]) {
+            this.settings.pendingCloudDeletes[rule.id] = [];
+          }
+          if (!this.settings.pendingCloudDeletes[rule.id].some(d => d.path === relativePath)) {
+            this.settings.pendingCloudDeletes[rule.id].push({ path: relativePath, deletedAt: Date.now() });
+          }
+        }
+        this.saveSettings();
+      })
+    );
+
     // Ribbon icon for manual sync
-    this.addRibbonIcon("cloud", "Multi Cloud Sync", async () => {
+    this.ribbonIconEl = this.addRibbonIcon("refresh-cw", "Multi Cloud Sync", async () => {
       await this.runSync();
     });
+
+    // Status bar
+    this.statusBarEl = this.addStatusBarItem();
+    this.statusBarEl.setText("");
 
     // Command: Run full pipeline
     this.addCommand({
@@ -237,16 +264,43 @@ export default class MultiSyncPlugin extends Plugin {
 
   /** Run the sync pipeline */
   async runSync(dryRun = false) {
-    if (this.settings.pipeline.length === 0) {
-      new Notice("MultiSync: No pipeline steps configured. Go to Settings.");
+    if (this.syncing) {
+      new Notice("MultiSync: Sync already in progress.");
       return;
     }
 
+    // Build pipeline: advanced uses custom pipeline, default generates standard order from rules
+    let pipeline = this.settings.pipeline;
+    if (!this.settings.advancedMode) {
+      const ops: import("./types").SyncOpType[] = [
+        "cloud-update", "local-update", "cloud-add", "local-add",
+        "local-delete", "cloud-delete",
+      ];
+      pipeline = [];
+      for (const rule of this.settings.rules) {
+        for (const op of ops) {
+          pipeline.push({ ruleId: rule.id, operation: op });
+        }
+      }
+    }
+
+    if (pipeline.length === 0) {
+      new Notice("MultiSync: No rules or pipeline steps configured. Go to Settings.");
+      return;
+    }
+
+    // Start animation
+    this.syncing = true;
+    this.ribbonIconEl?.addClass("multisync-spin");
+    this.statusBarEl?.setText("⟳ Syncing…");
+
     new Notice(dryRun ? "MultiSync: Dry run starting..." : "MultiSync: Starting sync...");
     const startTime = Date.now();
+    let totalActions = 0;
+    let completedActions = 0;
 
     try {
-      const result = await runPipeline(this.settings.pipeline, {
+      const result = await runPipeline(pipeline, {
         app: this.app,
         settings: this.settings,
         providers: this.providers,
@@ -254,8 +308,14 @@ export default class MultiSyncPlugin extends Plugin {
         dryRun,
         onProgress: (msg) => {
           console.log(`MultiSync: ${msg}`);
+          // Extract action count from "operation: N action(s)"
+          const m = msg.match(/(\d+) action\(s\)/);
+          if (m) totalActions += parseInt(m[1]);
+          this.statusBarEl?.setText(`⟳ ${completedActions}/${totalActions}`);
         },
         onAction: (action, step) => {
+          completedActions++;
+          this.statusBarEl?.setText(`⟳ ${completedActions}/${totalActions}`);
           const prefix = dryRun ? "[DRY RUN]" : "";
           console.log(
             `MultiSync: ${prefix} [${step.ruleId}] ${action.operation} → ${action.path}`
@@ -275,14 +335,23 @@ export default class MultiSyncPlugin extends Plugin {
         for (const err of result.errors) {
           console.error(`MultiSync Error: ${err}`);
         }
+        this.statusBarEl?.setText(`✗ ${result.errors.length} error(s)`);
       } else {
         new Notice(
           `MultiSync: ${mode}Done in ${elapsed}s. ${result.actionsExecuted} action(s) ${dryRun ? "detected" : "synced"}.`
         );
+        this.statusBarEl?.setText(`✓ Synced`);
       }
+      // Clear status bar after 10s
+      setTimeout(() => this.statusBarEl?.setText(""), 10000);
     } catch (e: any) {
       new Notice(`MultiSync: Sync failed! ${e?.message || e}`);
       console.error("MultiSync:", e);
+      this.statusBarEl?.setText("✗ Sync failed");
+      setTimeout(() => this.statusBarEl?.setText(""), 10000);
+    } finally {
+      this.syncing = false;
+      this.ribbonIconEl?.removeClass("multisync-spin");
     }
   }
 }

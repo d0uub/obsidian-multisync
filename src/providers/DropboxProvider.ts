@@ -195,6 +195,11 @@ export class DropboxProvider implements ICloudProvider {
     }
   }
 
+  async getDeletedItems(_cloudFolder: string, _deltaToken: string): Promise<{ deleted: string[]; newDeltaToken: string }> {
+    // TODO: Implement via Dropbox list_folder/continue cursor API
+    return { deleted: [], newDeltaToken: _deltaToken };
+  }
+
   async getDisplayName(): Promise<string> {
     try {
       const account = await this.apiRpc("/users/get_current_account", {});

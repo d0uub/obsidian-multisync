@@ -1,11 +1,10 @@
-import type { FileEntry, Snapshot, SyncAction, SyncOpType } from "../types";
-import { snapshotHas } from "./snapshot";
+import type { FileEntry, SyncAction, SyncOpType } from "../types";
 import { resolveConflict } from "./merger";
 
 /**
  * Individual sync operation detectors.
- * Each function is INDEPENDENT — takes (cloudList, localList, snapshot) and returns SyncAction[].
- * The user can invoke them in any order, skip any, or reorder across rules.
+ * Each function is INDEPENDENT — takes (cloudList, localList) or (pendingDeletes) and returns SyncAction[].
+ * No snapshot dependency — uses event-driven delete tracking instead.
  */
 
 /** Index a file list by path for O(1) lookup */
@@ -22,8 +21,7 @@ function indexByPath(entries: FileEntry[]): Map<string, FileEntry> {
  */
 export function detectLocalUpdates(
   cloudList: FileEntry[],
-  localList: FileEntry[],
-  _snapshot: Snapshot
+  localList: FileEntry[]
 ): SyncAction[] {
   const cloudMap = indexByPath(cloudList);
   const actions: SyncAction[] = [];
@@ -49,8 +47,7 @@ export function detectLocalUpdates(
  */
 export function detectCloudUpdates(
   cloudList: FileEntry[],
-  localList: FileEntry[],
-  _snapshot: Snapshot
+  localList: FileEntry[]
 ): SyncAction[] {
   const localMap = indexByPath(localList);
   const actions: SyncAction[] = [];
@@ -72,21 +69,21 @@ export function detectCloudUpdates(
 }
 
 /**
- * Detect files in LOCAL only.
- * - If NOT in snapshot → new file → local-add (push to cloud)
- * - If IN snapshot → was synced before but now missing from cloud → cloud deleted it → cloud-delete (handled by detectCloudDeletes)
- * This function ONLY returns local-add actions.
+ * Detect files in LOCAL only (not on cloud).
+ * Without snapshot, all local-only files are treated as new → push to cloud.
+ * Files in pendingCloudDeletes are excluded (those are intentional deletes).
  */
 export function detectLocalAdds(
   cloudList: FileEntry[],
   localList: FileEntry[],
-  snapshot: Snapshot
+  pendingDeletes: { path: string; deletedAt: number }[] = []
 ): SyncAction[] {
   const cloudMap = indexByPath(cloudList);
+  const deleteSet = new Set(pendingDeletes.map(d => d.path));
   const actions: SyncAction[] = [];
   for (const local of localList) {
-    if (cloudMap.has(local.path)) continue; // exists on both sides, not an add
-    if (snapshotHas(snapshot, local.path)) continue; // was synced before → this is a cloud-delete case
+    if (cloudMap.has(local.path)) continue;
+    if (deleteSet.has(local.path)) continue; // user deleted then re-created? Unlikely but skip
     actions.push({
       operation: "local-add",
       path: local.path,
@@ -98,21 +95,21 @@ export function detectLocalAdds(
 }
 
 /**
- * Detect files in CLOUD only.
- * - If NOT in snapshot → new cloud file → cloud-add (pull to local)
- * - If IN snapshot → was synced before but now missing locally → local deleted it → local-delete (handled by detectLocalDeletes)
- * This function ONLY returns cloud-add actions.
+ * Detect files in CLOUD only (not on local).
+ * Without snapshot, all cloud-only files are treated as new → pull to local.
+ * Files in pendingCloudDeletes are excluded (we'll delete them from cloud instead).
  */
 export function detectCloudAdds(
   cloudList: FileEntry[],
   localList: FileEntry[],
-  snapshot: Snapshot
+  pendingDeletes: { path: string; deletedAt: number }[] = []
 ): SyncAction[] {
   const localMap = indexByPath(localList);
+  const deleteSet = new Set(pendingDeletes.map(d => d.path));
   const actions: SyncAction[] = [];
   for (const cloud of cloudList) {
-    if (localMap.has(cloud.path)) continue; // exists on both sides
-    if (snapshotHas(snapshot, cloud.path)) continue; // was synced before → local-delete case
+    if (localMap.has(cloud.path)) continue;
+    if (deleteSet.has(cloud.path)) continue; // this file was locally deleted → will be handled by local-delete
     actions.push({
       operation: "cloud-add",
       path: cloud.path,
@@ -124,24 +121,63 @@ export function detectCloudAdds(
 }
 
 /**
- * Detect files that were synced (in snapshot) + exist in local but NOT in cloud.
- * → Cloud deleted it → delete from local.
- * Snapshot turns what would be "local-add" into "cloud-delete".
+ * Detect files that were deleted locally (tracked via vault.on("delete")).
+ * Safety: if cloud file was modified AFTER local deletion, re-download instead of deleting.
+ */
+export function detectLocalDeletes(
+  cloudList: FileEntry[],
+  _localList: FileEntry[],
+  pendingDeletes: { path: string; deletedAt: number }[] = []
+): SyncAction[] {
+  const cloudMap = indexByPath(cloudList);
+  const actions: SyncAction[] = [];
+  for (const { path: deletedPath, deletedAt } of pendingDeletes) {
+    const cloud = cloudMap.get(deletedPath);
+    if (!cloud) continue; // already gone from cloud → no action
+    if (cloud.mtime > deletedAt) {
+      // Cloud file was modified AFTER local deletion → re-download to local instead
+      actions.push({
+        operation: "cloud-add",
+        path: deletedPath,
+        isFolder: cloud.isFolder,
+        sourceEntry: cloud,
+      });
+    } else {
+      // Cloud file not modified since deletion → safe to delete from cloud
+      actions.push({
+        operation: "local-delete",
+        path: deletedPath,
+        isFolder: cloud.isFolder,
+        sourceEntry: cloud,
+      });
+    }
+  }
+  return actions;
+}
+
+/**
+ * Detect files deleted on cloud (via delta API) that should be trashed locally.
+ * cloudDeletedPaths comes from provider.getDeletedItems() — paths deleted on cloud since last sync.
+ * Only deletes locally if the file is NOT on cloud AND exists locally.
  */
 export function detectCloudDeletes(
   cloudList: FileEntry[],
   localList: FileEntry[],
-  snapshot: Snapshot
+  _pendingDeletes: { path: string; deletedAt: number }[] = [],
+  cloudDeletedPaths: string[] = []
 ): SyncAction[] {
+  if (cloudDeletedPaths.length === 0) return [];
   const cloudMap = indexByPath(cloudList);
+  const localMap = indexByPath(localList);
   const actions: SyncAction[] = [];
-  for (const local of localList) {
-    if (cloudMap.has(local.path)) continue; // still on cloud
-    if (!snapshotHas(snapshot, local.path)) continue; // never synced → local-add, not delete
-    // Was in snapshot + local, but cloud is missing → cloud deleted it
+  for (const deletedPath of cloudDeletedPaths) {
+    // Only act if the file no longer exists on cloud AND still exists locally
+    if (cloudMap.has(deletedPath)) continue; // re-created on cloud — skip
+    const local = localMap.get(deletedPath);
+    if (!local) continue; // already gone locally — skip
     actions.push({
       operation: "cloud-delete",
-      path: local.path,
+      path: deletedPath,
       isFolder: local.isFolder,
       sourceEntry: local,
     });
@@ -149,39 +185,16 @@ export function detectCloudDeletes(
   return actions;
 }
 
-/**
- * Detect files that were synced (in snapshot) + exist in cloud but NOT in local.
- * → Local deleted it → delete from cloud.
- * Snapshot turns what would be "cloud-add" into "local-delete".
- */
-export function detectLocalDeletes(
-  cloudList: FileEntry[],
-  localList: FileEntry[],
-  snapshot: Snapshot
-): SyncAction[] {
-  const localMap = indexByPath(localList);
-  const actions: SyncAction[] = [];
-  for (const cloud of cloudList) {
-    if (localMap.has(cloud.path)) continue; // still local
-    if (!snapshotHas(snapshot, cloud.path)) continue; // never synced → cloud-add, not delete
-    // Was in snapshot + cloud, but local is missing → local deleted it
-    actions.push({
-      operation: "local-delete",
-      path: cloud.path,
-      isFolder: cloud.isFolder,
-      sourceEntry: cloud,
-    });
-  }
-  return actions;
-}
+/** Pending delete entry type */
+export type PendingDelete = { path: string; deletedAt: number };
 
 /** Map of operation type to its detector function */
 export const OPERATION_DETECTORS: Record<
   SyncOpType,
-  (cloud: FileEntry[], local: FileEntry[], snap: Snapshot) => SyncAction[]
+  (cloud: FileEntry[], local: FileEntry[], pendingDeletes: PendingDelete[], cloudDeletedPaths?: string[]) => SyncAction[]
 > = {
-  "local-update": detectLocalUpdates,
-  "cloud-update": detectCloudUpdates,
+  "local-update": (c, l, _p) => detectLocalUpdates(c, l),
+  "cloud-update": (c, l, _p) => detectCloudUpdates(c, l),
   "local-add": detectLocalAdds,
   "cloud-add": detectCloudAdds,
   "local-delete": detectLocalDeletes,
