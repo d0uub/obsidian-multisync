@@ -23,6 +23,7 @@ import {
   exchangeOneDriveCode,
   exchangeGDriveCode,
 } from "./oauth";
+import { FolderSuggest } from "./ui/FolderSuggest";
 
 const CLOUD_TYPES: { value: CloudProviderType; label: string }[] = [
   { value: "dropbox", label: "Dropbox" },
@@ -381,9 +382,10 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
     const account = this.plugin.settings.accounts.find(
       (a) => a.id === rule.accountId
     );
-    const localLabel = rule.localFolder || "(vault root)";
+    const localLabel = rule.localFolder || "(entire vault)";
+    const cloudLabel = rule.cloudFolder || "(drive root)";
     const s = new Setting(containerEl)
-      .setName(`${account?.name || "?"} : ${rule.cloudFolder} ↔ ${localLabel}`)
+      .setName(`${account?.name || "?"} : ${cloudLabel} ↔ ${localLabel}`)
       .setDesc(`Rule: ${rule.id}`);
 
     // Account dropdown
@@ -400,26 +402,28 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
     });
 
     // Cloud folder
-    s.addText((text) =>
+    s.addText((text) => {
       text
-        .setPlaceholder("Cloud folder, e.g. /officefolder")
+        .setPlaceholder("Cloud folder, e.g. Documents/notes")
         .setValue(rule.cloudFolder)
         .onChange(async (val) => {
-          rule.cloudFolder = val;
+          // Auto-strip leading slash for UX
+          rule.cloudFolder = val.replace(/^\/+/, "");
           await this.plugin.saveSettings();
-        })
-    );
+        });
+    });
 
-    // Local folder
-    s.addText((text) =>
-      text
-        .setPlaceholder("Local folder (relative to vault root)")
-        .setValue(rule.localFolder)
+    // Local folder (with suggest dropdown)
+    s.addSearch((search) => {
+      search
+        .setPlaceholder("Type to search vault folders...")
+        .setValue(rule.localFolder || "(entire vault)")
         .onChange(async (val) => {
-          rule.localFolder = val;
+          rule.localFolder = val === "(entire vault)" ? "" : val.replace(/^\/+/, "");
           await this.plugin.saveSettings();
-        })
-    );
+        });
+      new FolderSuggest(this.app, search.inputEl);
+    });
 
     // Delete rule
     s.addButton((btn) =>

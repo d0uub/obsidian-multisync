@@ -17,6 +17,11 @@ export class Setting {
   addText() { return this; }
   addButton() { return this; }
   addDropdown() { return this; }
+  addSearch() { return this; }
+}
+export class AbstractInputSuggest<T> {
+  constructor(_app: any, _inputEl: any) {}
+  close() {}
 }
 export const Platform = {
   isDesktopApp: false,
