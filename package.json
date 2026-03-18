@@ -1,0 +1,21 @@
+{
+  "name": "obsidian-multisync",
+  "version": "0.1.0",
+  "description": "Multi-cloud folder sync for Obsidian",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production"
+  },
+  "devDependencies": {
+    "obsidian": "^1.5.7",
+    "typescript": "^5.5.4",
+    "tslib": "^2.6.3",
+    "esbuild": "^0.23.0",
+    "@types/node": "^20.14.12"
+  },
+  "dependencies": {
+    "dropbox": "^10.34.0",
+    "@microsoft/microsoft-graph-client": "^3.0.7"
+  }
+}

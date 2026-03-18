@@ -1,0 +1,9 @@
+{
+  "id": "obsidian-multisync",
+  "name": "Multi Cloud Sync",
+  "version": "0.1.0",
+  "minAppVersion": "0.15.0",
+  "description": "Sync individual vault folders with multiple cloud providers (Dropbox, OneDrive, Google Drive). Per-folder mapping, 3-way snapshot sync, modular operations.",
+  "author": "cht132",
+  "isDesktopOnly": false
+}
