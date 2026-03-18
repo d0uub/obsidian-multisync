@@ -29,6 +29,8 @@ export interface PipelineContext {
   onProgress?: (msg: string) => void;
   /** Called when an action is about to execute */
   onAction?: (action: SyncAction, step: SyncStep) => void;
+  /** If true, only detect actions but don't execute them */
+  dryRun?: boolean;
 }
 
 /** Cache for file lists so we don't re-fetch per operation */
@@ -90,7 +92,9 @@ export async function runPipeline(
       for (const action of actions) {
         try {
           ctx.onAction?.(action, step);
-          await executeAction(action, rule, provider, ctx);
+          if (!ctx.dryRun) {
+            await executeAction(action, rule, provider, ctx);
+          }
           actionsExecuted++;
         } catch (e: any) {
           errors.push(
@@ -100,7 +104,7 @@ export async function runPipeline(
       }
 
       // Invalidate cache after write operations (add/update/delete modify file lists)
-      if (actions.length > 0) {
+      if (actions.length > 0 && !ctx.dryRun) {
         listCaches.delete(rule.id);
       }
     } catch (e: any) {
@@ -110,8 +114,9 @@ export async function runPipeline(
     }
   }
 
-  // After all steps complete, rebuild and save snapshots for all touched rules
-  const touchedRuleIds = new Set(steps.map((s) => s.ruleId));
+  // After all steps complete, rebuild and save snapshots (skip in dry-run)
+  if (!ctx.dryRun) {
+    const touchedRuleIds = new Set(steps.map((s) => s.ruleId));
   for (const ruleId of touchedRuleIds) {
     try {
       const rule = ctx.settings.rules.find((r) => r.id === ruleId);
@@ -128,9 +133,11 @@ export async function runPipeline(
     } catch (e: any) {
       errors.push(`Snapshot save failed for ${ruleId}: ${e?.message || e}`);
     }
-  }
+    }
 
-  await ctx.saveSettings();
+    await ctx.saveSettings();
+  } // end dry-run guard
+
   return { actionsExecuted, errors };
 }
 

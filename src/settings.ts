@@ -165,6 +165,13 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
           .onClick(async () => {
             await this.plugin.runSync();
           })
+      )
+      .addButton((btn) =>
+        btn
+          .setButtonText("👁 Dry Run")
+          .onClick(async () => {
+            await this.plugin.runSync(true);
+          })
       );
   }
 

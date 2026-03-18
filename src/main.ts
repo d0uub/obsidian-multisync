@@ -46,6 +46,15 @@ export default class MultiSyncPlugin extends Plugin {
       },
     });
 
+    // Command: Dry run (preview actions without executing)
+    this.addCommand({
+      id: "dry-run-sync",
+      name: "Dry run sync (preview only)",
+      callback: async () => {
+        await this.runSync(true);
+      },
+    });
+
     // Command: Run single rule (all operations)
     this.addCommand({
       id: "run-sync-rule",
@@ -224,13 +233,13 @@ export default class MultiSyncPlugin extends Plugin {
   }
 
   /** Run the sync pipeline */
-  async runSync() {
+  async runSync(dryRun = false) {
     if (this.settings.pipeline.length === 0) {
       new Notice("MultiSync: No pipeline steps configured. Go to Settings.");
       return;
     }
 
-    new Notice("MultiSync: Starting sync...");
+    new Notice(dryRun ? "MultiSync: Dry run starting..." : "MultiSync: Starting sync...");
     const startTime = Date.now();
 
     try {
@@ -239,27 +248,33 @@ export default class MultiSyncPlugin extends Plugin {
         settings: this.settings,
         providers: this.providers,
         saveSettings: () => this.saveSettings(),
+        dryRun,
         onProgress: (msg) => {
           console.log(`MultiSync: ${msg}`);
         },
         onAction: (action, step) => {
+          const prefix = dryRun ? "[DRY RUN]" : "";
           console.log(
-            `MultiSync: [${step.ruleId}] ${action.operation} → ${action.path}`
+            `MultiSync: ${prefix} [${step.ruleId}] ${action.operation} → ${action.path}`
           );
+          if (dryRun) {
+            new Notice(`Preview: ${action.operation} ${action.path}`);
+          }
         },
       });
 
       const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+      const mode = dryRun ? "[DRY RUN] " : "";
       if (result.errors.length > 0) {
         new Notice(
-          `MultiSync: Done in ${elapsed}s. ${result.actionsExecuted} actions, ${result.errors.length} error(s).`
+          `MultiSync: ${mode}Done in ${elapsed}s. ${result.actionsExecuted} actions, ${result.errors.length} error(s).`
         );
         for (const err of result.errors) {
           console.error(`MultiSync Error: ${err}`);
         }
       } else {
         new Notice(
-          `MultiSync: Done in ${elapsed}s. ${result.actionsExecuted} action(s) synced.`
+          `MultiSync: ${mode}Done in ${elapsed}s. ${result.actionsExecuted} action(s) ${dryRun ? "detected" : "synced"}.`
         );
       }
     } catch (e: any) {
