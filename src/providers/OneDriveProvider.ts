@@ -111,11 +111,18 @@ export class OneDriveProvider implements ICloudProvider {
         ? "/me/drive/root"
         : `/me/drive/root:${cloudFolder}:`;
 
-    // Recursive listing via /children with expand
+    // Recursive listing via /children
     const recurse = async (apiPath: string, prefix: string) => {
       let url = `${apiPath}/children?$select=name,size,lastModifiedDateTime,folder,file&$top=200`;
       while (url) {
-        const data = await this.graphGetRaw(url);
+        let data: any;
+        try {
+          data = await this.graphGetRaw(url);
+        } catch (e: any) {
+          // 404 = folder doesn't exist on cloud yet → return empty
+          if (e?.status === 404 || e?.message?.includes("404")) return;
+          throw e;
+        }
         for (const item of data.value || []) {
           const itemPath = prefix ? `${prefix}/${item.name}` : item.name;
           const isFolder = !!item.folder;
@@ -173,6 +180,23 @@ export class OneDriveProvider implements ICloudProvider {
     _mtime: number
   ): Promise<void> {
     const fullPath = joinCloudPath(cloudFolder, relativePath);
+    // Ensure parent folders exist
+    const parts = fullPath.split("/").filter(Boolean);
+    if (parts.length > 1) {
+      const parentParts = parts.slice(0, -1);
+      let currentPath = "";
+      for (const part of parentParts) {
+        const parentOfCurrent = currentPath === "" ? "/me/drive/root" : `/me/drive/root:/${currentPath}:`;
+        try {
+          await this.graphPost(`${parentOfCurrent}/children`, {
+            name: part,
+            folder: {},
+            "@microsoft.graph.conflictBehavior": "fail",
+          });
+        } catch { /* folder may already exist */ }
+        currentPath = currentPath ? `${currentPath}/${part}` : part;
+      }
+    }
     // For files < 4MB, use simple upload
     await this.graphPut(`/me/drive/root:${fullPath}:/content`, content);
   }

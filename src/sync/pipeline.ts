@@ -149,12 +149,16 @@ async function executeAction(
   ctx: PipelineContext
 ): Promise<void> {
   const { app } = ctx;
-  const localBase = rule.localFolder;
+  const normalizedBase = normalizePath(rule.localFolder);
+
+  /** Build vault path from relative sync path */
+  const toVaultPath = (relativePath: string) =>
+    normalizedBase ? `${normalizedBase}/${relativePath}` : relativePath;
 
   switch (action.operation) {
     case "local-update": {
       // Local file is newer → push to cloud
-      const localPath = localBase ? `${localBase}/${action.path}` : action.path;
+      const localPath = toVaultPath(action.path);
       const content = await app.vault.adapter.readBinary(localPath);
       await provider.writeFile(
         rule.cloudFolder,
@@ -167,7 +171,7 @@ async function executeAction(
     case "cloud-update": {
       // Cloud file is newer → pull to local
       const content = await provider.readFile(rule.cloudFolder, action.path);
-      const localPath = localBase ? `${localBase}/${action.path}` : action.path;
+      const localPath = toVaultPath(action.path);
       await ensureLocalParentDir(app, localPath);
       await app.vault.adapter.writeBinary(localPath, content);
       break;
@@ -176,7 +180,7 @@ async function executeAction(
       if (action.isFolder) {
         await provider.mkdir(rule.cloudFolder, action.path.replace(/\/$/, ""));
       } else {
-        const localPath = localBase ? `${localBase}/${action.path}` : action.path;
+        const localPath = toVaultPath(action.path);
         const content = await app.vault.adapter.readBinary(localPath);
         await provider.writeFile(
           rule.cloudFolder,
@@ -189,11 +193,11 @@ async function executeAction(
     }
     case "cloud-add": {
       if (action.isFolder) {
-        const localPath = localBase ? `${localBase}/${action.path}` : action.path;
+        const localPath = toVaultPath(action.path);
         await ensureLocalParentDir(app, localPath.replace(/\/$/, "") + "/dummy");
       } else {
         const content = await provider.readFile(rule.cloudFolder, action.path);
-        const localPath = localBase ? `${localBase}/${action.path}` : action.path;
+        const localPath = toVaultPath(action.path);
         await ensureLocalParentDir(app, localPath);
         await app.vault.adapter.writeBinary(localPath, content);
       }
@@ -206,7 +210,7 @@ async function executeAction(
     }
     case "cloud-delete": {
       // Cloud deleted → delete from local
-      const localPath = localBase ? `${localBase}/${action.path}` : action.path;
+      const localPath = toVaultPath(action.path);
       const cleanPath = localPath.replace(/\/$/, "");
       if (await app.vault.adapter.exists(cleanPath)) {
         await app.vault.adapter.remove(cleanPath);
@@ -223,7 +227,8 @@ export async function listLocalFiles(
 ): Promise<FileEntry[]> {
   const entries: FileEntry[] = [];
   const files = app.vault.getFiles();
-  const prefix = localFolder ? normalizePath(localFolder) + "/" : "";
+  const normalized = normalizePath(localFolder);
+  const prefix = normalized ? normalized + "/" : "";
 
   for (const file of files) {
     const filePath = normalizePath(file.path);

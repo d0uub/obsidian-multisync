@@ -211,6 +211,9 @@ export default class MultiSyncPlugin extends Plugin {
           onRefresh
         );
       case "onedrive":
+        if (!account.credentials.clientId) {
+          account.credentials.clientId = "03beb548-4548-4835-ba4e-18ac1f469442";
+        }
         return new OneDriveProvider(
           creds.accessToken || "",
           creds.refreshToken || "",

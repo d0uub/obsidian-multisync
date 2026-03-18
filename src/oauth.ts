@@ -112,9 +112,10 @@ export interface OneDriveAuthResult {
 
 const ONEDRIVE_SCOPES = "User.Read Files.ReadWrite.All offline_access";
 const ONEDRIVE_AUTHORITY = "https://login.microsoftonline.com/common";
+const ONEDRIVE_CLIENT_ID = "03beb548-4548-4835-ba4e-18ac1f469442";
 
 export async function getOneDriveAuthUrl(
-  clientId: string,
+  _clientId: string,
   manual: boolean
 ): Promise<{ authUrl: string; verifier: string }> {
   const { verifier, challenge } = await generatePKCE();
@@ -123,7 +124,7 @@ export async function getOneDriveAuthUrl(
     : `obsidian://${CALLBACK_ONEDRIVE}`;
 
   const params = new URLSearchParams({
-    client_id: clientId,
+    client_id: ONEDRIVE_CLIENT_ID,
     response_type: "code",
     redirect_uri: redirectUri,
     scope: ONEDRIVE_SCOPES,
@@ -139,7 +140,7 @@ export async function getOneDriveAuthUrl(
 }
 
 export async function exchangeOneDriveCode(
-  clientId: string,
+  _clientId: string,
   code: string,
   verifier: string,
   manual: boolean
@@ -153,7 +154,7 @@ export async function exchangeOneDriveCode(
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
-      client_id: clientId,
+      client_id: ONEDRIVE_CLIENT_ID,
       scope: ONEDRIVE_SCOPES,
       code,
       redirect_uri: redirectUri,

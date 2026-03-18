@@ -176,85 +176,160 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
   }
 
   private renderAccount(containerEl: HTMLElement, account: CloudAccount) {
-    const s = new Setting(containerEl)
-      .setName(account.name)
-      .setDesc(`Type: ${account.type} | ID: ${account.id}`);
+    const isAuthed = !!(account.credentials.accessToken && account.credentials.refreshToken);
+    const typeLabel = CLOUD_TYPES.find(c => c.value === account.type)?.label || account.type;
 
-    // Name
-    s.addText((text) =>
-      text
-        .setPlaceholder("Account name")
-        .setValue(account.name)
-        .onChange(async (val) => {
-          account.name = val;
-          await this.plugin.saveSettings();
-        })
-    );
-
-    // Type dropdown
-    s.addDropdown((dd) => {
-      for (const ct of CLOUD_TYPES) dd.addOption(ct.value, ct.label);
-      dd.setValue(account.type);
-      dd.onChange(async (val) => {
-        account.type = val as CloudProviderType;
-        account.credentials = {};
-        await this.plugin.saveSettings();
-        this.plugin.initProviders();
-        this.display();
+    if (isAuthed) {
+      // ─── Compact view after auth ───
+      const wrapper = containerEl.createDiv({ cls: "multisync-account-row" });
+      
+      // Clickable label → editable on click
+      const nameEl = wrapper.createEl("span", {
+        text: `✓ ${account.name}`,
+        cls: "multisync-account-name",
       });
-    });
+      nameEl.style.cursor = "pointer";
+      nameEl.style.fontWeight = "600";
+      nameEl.style.marginRight = "8px";
+      nameEl.title = "Click to rename";
 
-    // Credentials button
-    s.addButton((btn) =>
-      btn.setButtonText("Credentials").onClick(() => {
-        this.renderCredentials(containerEl, account);
-      })
-    );
+      const descEl = wrapper.createEl("span", {
+        text: ` (${typeLabel})`,
+        cls: "setting-item-description",
+      });
 
-    // Authorize button (OAuth flow)
-    s.addButton((btn) =>
-      btn.setButtonText("Authorize").setCta().onClick(async () => {
-        await this.startOAuthFlow(account);
-      })
-    );
+      nameEl.addEventListener("click", () => {
+        nameEl.contentEditable = "true";
+        nameEl.textContent = account.name;
+        nameEl.focus();
+        // Select all text
+        const range = document.createRange();
+        range.selectNodeContents(nameEl);
+        const sel = window.getSelection();
+        sel?.removeAllRanges();
+        sel?.addRange(range);
+      });
 
-    // Test connection
-    s.addButton((btn) =>
-      btn.setButtonText("Test").onClick(async () => {
-        const provider = this.plugin.providers.get(account.id);
-        if (!provider) {
-          new Notice("Provider not initialized. Check credentials.");
-          return;
+      const saveName = async () => {
+        nameEl.contentEditable = "false";
+        const newName = (nameEl.textContent || "").trim();
+        if (newName && newName !== account.name) {
+          account.name = newName;
+          await this.plugin.saveSettings();
+          this.display(); // refresh to update rule/pipeline labels
+        } else {
+          nameEl.textContent = `✓ ${account.name}`;
         }
-        const ok = await provider.testConnection();
-        new Notice(ok ? "✓ Connected!" : "✗ Connection failed.");
-      })
-    );
+      };
 
-    // Delete
-    s.addButton((btn) =>
-      btn
-        .setButtonText("✕")
-        .setWarning()
-        .onClick(async () => {
-          this.plugin.settings.accounts =
-            this.plugin.settings.accounts.filter((a) => a.id !== account.id);
-          // Remove rules and pipeline steps referencing this account
-          this.plugin.settings.rules = this.plugin.settings.rules.filter(
-            (r) => r.accountId !== account.id
-          );
-          const ruleIds = new Set(
-            this.plugin.settings.rules.map((r) => r.id)
-          );
-          this.plugin.settings.pipeline =
-            this.plugin.settings.pipeline.filter((s) =>
-              ruleIds.has(s.ruleId)
-            );
+      nameEl.addEventListener("blur", saveName);
+      nameEl.addEventListener("keydown", (e: KeyboardEvent) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          nameEl.blur();
+        } else if (e.key === "Escape") {
+          nameEl.textContent = `✓ ${account.name}`;
+          nameEl.contentEditable = "false";
+        }
+      });
+
+      const s = new Setting(wrapper)
+        .setDesc("");
+
+      // Re-authorize
+      s.addButton((btn) =>
+        btn.setButtonText("Re-authorize").onClick(async () => {
+          await this.startOAuthFlow(account);
+        })
+      );
+
+      // Disconnect
+      s.addButton((btn) =>
+        btn.setButtonText("Disconnect").setWarning().onClick(async () => {
+          account.credentials = {};
           await this.plugin.saveSettings();
           this.plugin.initProviders();
           this.display();
         })
-    );
+      );
+
+      // Delete account
+      s.addButton((btn) =>
+        btn.setButtonText("✕").setWarning().onClick(async () => {
+          this.plugin.settings.accounts =
+            this.plugin.settings.accounts.filter((a) => a.id !== account.id);
+          this.plugin.settings.rules = this.plugin.settings.rules.filter(
+            (r) => r.accountId !== account.id
+          );
+          const ruleIds = new Set(this.plugin.settings.rules.map((r) => r.id));
+          this.plugin.settings.pipeline =
+            this.plugin.settings.pipeline.filter((s) => ruleIds.has(s.ruleId));
+          await this.plugin.saveSettings();
+          this.plugin.initProviders();
+          this.display();
+        })
+      );
+    } else {
+      // ─── Full setup view before auth ───
+      const s = new Setting(containerEl)
+        .setName(account.name || "New Account")
+        .setDesc(`${typeLabel} | Not connected`);
+
+      // Name
+      s.addText((text) =>
+        text
+          .setPlaceholder("Account name")
+          .setValue(account.name)
+          .onChange(async (val) => {
+            account.name = val;
+            await this.plugin.saveSettings();
+          })
+      );
+
+      // Type dropdown
+      s.addDropdown((dd) => {
+        for (const ct of CLOUD_TYPES) dd.addOption(ct.value, ct.label);
+        dd.setValue(account.type);
+        dd.onChange(async (val) => {
+          account.type = val as CloudProviderType;
+          account.credentials = {};
+          await this.plugin.saveSettings();
+          this.plugin.initProviders();
+          this.display();
+        });
+      });
+
+      // Credentials (for manual setup or entering app key/client ID)
+      s.addButton((btn) =>
+        btn.setButtonText("Credentials").onClick(() => {
+          this.renderCredentials(containerEl, account);
+        })
+      );
+
+      // Authorize
+      s.addButton((btn) =>
+        btn.setButtonText("Authorize").setCta().onClick(async () => {
+          await this.startOAuthFlow(account);
+        })
+      );
+
+      // Delete
+      s.addButton((btn) =>
+        btn.setButtonText("✕").setWarning().onClick(async () => {
+          this.plugin.settings.accounts =
+            this.plugin.settings.accounts.filter((a) => a.id !== account.id);
+          this.plugin.settings.rules = this.plugin.settings.rules.filter(
+            (r) => r.accountId !== account.id
+          );
+          const ruleIds = new Set(this.plugin.settings.rules.map((r) => r.id));
+          this.plugin.settings.pipeline =
+            this.plugin.settings.pipeline.filter((s) => ruleIds.has(s.ruleId));
+          await this.plugin.saveSettings();
+          this.plugin.initProviders();
+          this.display();
+        })
+      );
+    }
   }
 
   private renderCredentials(containerEl: HTMLElement, account: CloudAccount) {
@@ -306,9 +381,10 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
     const account = this.plugin.settings.accounts.find(
       (a) => a.id === rule.accountId
     );
+    const localLabel = rule.localFolder || "(vault root)";
     const s = new Setting(containerEl)
-      .setName(`${account?.name || "?"} : ${rule.cloudFolder} ↔ ${rule.localFolder || "(vault root)"}`)
-      .setDesc(`Rule ID: ${rule.id}`);
+      .setName(`${account?.name || "?"} : ${rule.cloudFolder} ↔ ${localLabel}`)
+      .setDesc(`Rule: ${rule.id}`);
 
     // Account dropdown
     s.addDropdown((dd) => {
