@@ -3,3 +3,5 @@ main.js
 dist/
 *.js.map
 .env
+*.log
+test-*.mjs

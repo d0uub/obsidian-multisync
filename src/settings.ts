@@ -111,7 +111,9 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
 
     // ─── Sync Rules ───
     const rulesGroup = containerEl.createDiv({ cls: "setting-group" });
-    new Setting(rulesGroup).setName("Cloud Drive Mapping").setHeading();
+    new Setting(rulesGroup).setName("Cloud Drive Mapping")
+      .setDesc("Drag to re-order drive mapping sequence. Advanced mode able to fully customize drive and action order.")
+      .setHeading();
     const rulesListEl = rulesGroup.createDiv({ cls: "setting-items" });
     for (let ri = 0; ri < this.plugin.settings.rules.length; ri++) {
       this.renderRule(rulesListEl, this.plugin.settings.rules[ri], ri);
@@ -120,20 +122,9 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
 
     // ─── Sync Mode ───
     const syncGroup = containerEl.createDiv({ cls: "setting-group" });
-    new Setting(syncGroup).setName("Sync Mode").setHeading();
+    new Setting(syncGroup).setName("Sync Options").setHeading();
 
     const syncItems = syncGroup.createDiv({ cls: "setting-items multisync-pipeline-list" });
-
-    new Setting(syncItems)
-      .setName("Advanced Mode")
-      .setDesc("Fully customize sync operations and ordering.")
-      .addToggle((toggle) =>
-        toggle.setValue(this.plugin.settings.advancedMode).onChange(async (val) => {
-          this.plugin.settings.advancedMode = val;
-          await this.plugin.saveSettings();
-          this.display();
-        })
-      );
 
     new Setting(syncItems)
       .setName("Concurrent transfers")
@@ -146,6 +137,17 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
             await this.plugin.saveSettings();
             this.display();
           })
+      );
+
+    new Setting(syncItems)
+      .setName("Advanced Mode")
+      .setDesc("Fully customize sync operations and ordering.")
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.advancedMode).onChange(async (val) => {
+          this.plugin.settings.advancedMode = val;
+          await this.plugin.saveSettings();
+          this.display();
+        })
       );
 
     if (this.plugin.settings.advancedMode) {
@@ -520,7 +522,8 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
       });
     });
 
-    // ── Drag handle ──
+    // ── Drag handle (hidden in advanced mode — pipeline controls ordering) ──
+    if (!this.plugin.settings.advancedMode) {
     const handle = this.createDragIcon(row);
 
     handle.addEventListener("dragstart", (e) => {
@@ -554,6 +557,7 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
         this.display();
       }
     });
+    } // end if (!advancedMode) — drag handle
   }
 
   private renderAddRuleRow(containerEl: HTMLElement) {
