@@ -44,6 +44,8 @@ export function needsManualPaste(): boolean {
 // DROPBOX
 // ═══════════════════════════════════════════════
 
+const DROPBOX_APP_KEY = "y8k73tvwvsg3kbi";
+
 export interface DropboxAuthResult {
   access_token: string;
   refresh_token: string;
@@ -53,14 +55,14 @@ export interface DropboxAuthResult {
 }
 
 export async function getDropboxAuthUrl(
-  appKey: string,
+  _appKey: string,
   manual: boolean
 ): Promise<{ authUrl: string; verifier: string }> {
   const { verifier, challenge } = await generatePKCE();
   const redirectUri = manual ? undefined : `obsidian://${CALLBACK_DROPBOX}`;
 
   const params = new URLSearchParams({
-    client_id: appKey,
+    client_id: DROPBOX_APP_KEY,
     response_type: "code",
     token_access_type: "offline",
     code_challenge: challenge,
@@ -75,7 +77,7 @@ export async function getDropboxAuthUrl(
 }
 
 export async function exchangeDropboxCode(
-  appKey: string,
+  _appKey: string,
   code: string,
   verifier: string,
   manual: boolean
@@ -84,7 +86,7 @@ export async function exchangeDropboxCode(
     code,
     grant_type: "authorization_code",
     code_verifier: verifier,
-    client_id: appKey,
+    client_id: DROPBOX_APP_KEY,
   };
   if (!manual) {
     body.redirect_uri = `obsidian://${CALLBACK_DROPBOX}`;

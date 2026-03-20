@@ -1,4 +1,17 @@
 import type { FileEntry } from "../types";
+import type { CloudFileEntry } from "../utils/cloudRegistry";
+
+/** A single delta change from the cloud provider */
+export interface DeltaChange {
+  /** Cloud-provider-specific unique ID */
+  id: string;
+  /** True if the item was deleted */
+  deleted: boolean;
+  /** Full path from drive root (e.g. "folder/sub/file.md"). Absent for some OneDrive deletes. */
+  path?: string;
+  /** File entry details (only for non-deleted items) */
+  entry?: CloudFileEntry;
+}
 
 /**
  * Cloud provider interface.
@@ -49,6 +62,13 @@ export interface ICloudProvider {
   mkdir(cloudFolder: string, relativePath: string): Promise<void>;
 
   /**
+   * Ensure the cloud root folder exists.
+   * Called before listFiles and other operations that require the folder to exist.
+   * Must be idempotent — no-op if folder already exists.
+   */
+  ensureFolder(cloudFolder: string): Promise<void>;
+
+  /**
    * Get metadata for a single file/folder.
    * Returns null if not found.
    */
@@ -66,9 +86,18 @@ export interface ICloudProvider {
    * Get list of recently deleted file paths from cloud using incremental change tracking.
    * @param cloudFolder - cloud root folder
    * @param deltaToken - previous delta token (empty string for first run)
+   * @param idToPathMap - optional cloud-ID → path lookup from the cloud registry (for providers where delta doesn't include path in deleted entries)
    * @returns deleted paths relative to cloudFolder + new delta token for next call
    */
-  getDeletedItems(cloudFolder: string, deltaToken: string): Promise<{ deleted: string[]; newDeltaToken: string }>;
+  getDeletedItems(cloudFolder: string, deltaToken: string, idToPathMap?: Record<string, string>): Promise<{ deleted: string[]; newDeltaToken: string }>;
+
+  /**
+   * Full-account delta sync: enumerate all files on first call (no token),
+   * or return only changes since the last token. Paths are from drive root.
+   * @param deltaToken - empty string for full enumeration, otherwise last saved token
+   * @returns changes array + new delta token
+   */
+  syncAccountDelta(deltaToken: string): Promise<{ changes: DeltaChange[]; newDeltaToken: string; isFullEnum: boolean }>;
 
   /**
    * Human-readable display name for this provider instance.

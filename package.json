@@ -5,9 +5,11 @@
   "author": "d0uub",
   "main": "main.js",
   "scripts": {
-    "dev": "node esbuild.config.mjs",
+    "dev": "node esbuild.config.mjs \"D:/obsidian/.obsidian/plugins/obsidian-multisync\"",
     "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:integration": "set INTEGRATION_TEST=1 && vitest run tests/integration",
+    "test:e2e": "node tests/e2e-sync.mjs"
   },
   "devDependencies": {
     "@types/node": "^20.19.37",

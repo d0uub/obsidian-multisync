@@ -16,6 +16,8 @@ export interface FileEntry {
   hash?: string;
   /** Optional creation timestamp in ms (epoch) */
   ctime?: number;
+  /** Cloud-provider-specific unique ID (e.g. OneDrive item ID) */
+  cloudId?: string;
 }
 
 /** Supported cloud provider types */
@@ -88,8 +90,6 @@ export interface MultiSyncSettings {
   rules: SyncRule[];
   /** User-defined pipeline ordering (advanced mode) */
   pipeline: SyncStep[];
-  /** Files deleted locally, pending deletion from cloud. Keyed by ruleId */
-  pendingCloudDeletes: Record<string, { path: string; deletedAt: number }[]>;
   /** Delta tokens for incremental cloud change tracking. Keyed by accountId */
   deltaTokens: Record<string, string>;
   /** Use advanced pipeline mode instead of standard order */
@@ -102,7 +102,6 @@ export const DEFAULT_SETTINGS: MultiSyncSettings = {
   accounts: [],
   rules: [],
   pipeline: [],
-  pendingCloudDeletes: {},
   deltaTokens: {},
   advancedMode: false,
   concurrency: 4,

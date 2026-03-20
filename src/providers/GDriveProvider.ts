@@ -1,7 +1,79 @@
 import type { ICloudProvider } from "./ICloudProvider";
 import type { FileEntry } from "../types";
+import type { ProviderMeta } from "./registry";
 import { requestUrl } from "obsidian";
 import { normalizePath, joinCloudPath } from "../utils/helpers";
+import { generatePKCE } from "./registry";
+
+const GDRIVE_SCOPES = "https://www.googleapis.com/auth/drive.file";
+const CALLBACK = "multisync-cb-gdrive";
+const SVG_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12.01 1.485c-2.082 0-3.754.02-3.743.047.01.02 1.708 3.001 3.774 6.62l3.76 6.574h3.76c2.081 0 3.753-.02 3.742-.047-.005-.02-1.708-3.001-3.775-6.62l-3.76-6.574zm-4.76 1.73a789.828 789.861 0 0 0-3.63 6.319L0 15.868l1.89 3.298 1.885 3.297 3.62-6.335 3.618-6.33-1.88-3.287C8.1 4.704 7.255 3.22 7.25 3.214zm2.259 12.653-.203.348c-.114.198-.96 1.672-1.88 3.287a423.93 423.948 0 0 1-1.698 2.97c-.01.026 3.24.042 7.222.042h7.244l1.796-3.157c.992-1.734 1.85-3.23 1.906-3.323l.104-.167h-7.249z"/></svg>';
+
+export const GDRIVE_META: ProviderMeta = {
+  type: "gdrive",
+  label: "Google Drive",
+  svgIcon: SVG_ICON,
+  callbackProtocol: CALLBACK,
+  credentialFields: [
+    { key: "clientId", label: "Client ID" },
+    { key: "clientSecret", label: "Client Secret", secret: true },
+    { key: "accessToken", label: "Access Token", secret: true },
+    { key: "refreshToken", label: "Refresh Token", secret: true },
+  ],
+  getMissingCreds: (creds) => {
+    const missing: string[] = [];
+    if (!creds.clientId) missing.push("Client ID");
+    if (!creds.clientSecret) missing.push("Client Secret");
+    return missing;
+  },
+  autoFillCreds: () => { /* GDrive requires user-provided clientId/clientSecret */ },
+  getAuthUrl: async (creds, manual) => {
+    const { verifier, challenge } = await generatePKCE();
+    const redirectUri = manual ? "urn:ietf:wg:oauth:2.0:oob" : `obsidian://${CALLBACK}`;
+    const params = new URLSearchParams({
+      client_id: creds.clientId,
+      response_type: "code",
+      redirect_uri: redirectUri,
+      scope: GDRIVE_SCOPES,
+      access_type: "offline",
+      prompt: "consent",
+      code_challenge: challenge,
+      code_challenge_method: "S256",
+    });
+    return {
+      authUrl: `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`,
+      verifier,
+    };
+  },
+  exchangeCode: async (creds, code, verifier, manual) => {
+    const redirectUri = manual ? "urn:ietf:wg:oauth:2.0:oob" : `obsidian://${CALLBACK}`;
+    const resp = await requestUrl({
+      url: "https://oauth2.googleapis.com/token",
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: creds.clientId,
+        client_secret: creds.clientSecret,
+        code,
+        redirect_uri: redirectUri,
+        grant_type: "authorization_code",
+        code_verifier: verifier,
+      }).toString(),
+    });
+    const data = resp.json;
+    return { accessToken: data.access_token, refreshToken: data.refresh_token, expiresIn: data.expires_in };
+  },
+  createInstance: (creds, onTokenRefreshed) => {
+    return new GDriveProvider(
+      creds.accessToken || "",
+      creds.refreshToken || "",
+      creds.clientId || "",
+      creds.clientSecret || "",
+      parseInt(creds.tokenExpiry || "0", 10),
+      onTokenRefreshed,
+    );
+  },
+};
 
 /**
  * Google Drive implementation via REST API.
@@ -265,6 +337,11 @@ export class GDriveProvider implements ICloudProvider {
     }
   }
 
+  async ensureFolder(cloudFolder: string): Promise<void> {
+    // GDrive auto-creates via resolveFolderId; just ensure the root folder exists
+    await this.resolveFolderId(cloudFolder);
+  }
+
   async stat(cloudFolder: string, relativePath: string): Promise<FileEntry | null> {
     try {
       const fileId = await this.resolveFileId(cloudFolder, relativePath);
@@ -292,9 +369,14 @@ export class GDriveProvider implements ICloudProvider {
     }
   }
 
-  async getDeletedItems(_cloudFolder: string, _deltaToken: string): Promise<{ deleted: string[]; newDeltaToken: string }> {
+  async getDeletedItems(_cloudFolder: string, _deltaToken: string, _idToPathMap?: Record<string, string>): Promise<{ deleted: string[]; newDeltaToken: string }> {
     // TODO: Implement via Google Drive changes API
     return { deleted: [], newDeltaToken: _deltaToken };
+  }
+
+  async syncAccountDelta(_deltaToken: string): Promise<{ changes: import("./ICloudProvider").DeltaChange[]; newDeltaToken: string; isFullEnum: boolean }> {
+    // TODO: Implement via Google Drive changes API
+    return { changes: [], newDeltaToken: _deltaToken, isFullEnum: false };
   }
 
   async getDisplayName(): Promise<string> {

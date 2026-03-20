@@ -12,7 +12,8 @@ export function joinCloudPath(cloudFolder: string, relativePath: string): string
   const folder = cloudFolder.replace(/\/+$/, "");
   const rel = relativePath.replace(/^\/+/, "");
   if (!folder || folder === "/") return "/" + rel;
-  return folder + "/" + rel;
+  const joined = folder + "/" + rel;
+  return joined.startsWith("/") ? joined : "/" + joined;
 }
 
 /** Get the parent folder of a path */

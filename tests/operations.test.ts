@@ -19,11 +19,6 @@ function folder(path: string): FileEntry {
   return { path: path + "/", mtime: 0, size: 0, isFolder: true };
 }
 
-type PendingDelete = { path: string; deletedAt: number };
-function pd(path: string, deletedAt = 1000): PendingDelete {
-  return { path, deletedAt };
-}
-
 // ─── detectLocalUpdates ───
 
 describe("detectLocalUpdates", () => {
@@ -104,10 +99,11 @@ describe("detectLocalAdds", () => {
     expect(actions[0].path).toBe("new.md");
   });
 
-  it("excludes files in pendingDeletes", () => {
+  it("excludes files in syncBase (previously synced, now cloud-deleted)", () => {
     const cloud: FileEntry[] = [];
     const local = [file("old.md", 1000)];
-    const actions = detectLocalAdds(cloud, local, [pd("old.md")]);
+    const manifest = new Set(["old.md"]);
+    const actions = detectLocalAdds(cloud, local, [], manifest);
     expect(actions).toHaveLength(0);
   });
 
@@ -139,17 +135,11 @@ describe("detectCloudAdds", () => {
     expect(actions[0].path).toBe("cloud-new.md");
   });
 
-  it("excludes files in pendingDeletes", () => {
+  it("excludes files in syncBase (previously synced, now locally deleted)", () => {
     const cloud = [file("was-local.md", 2000)];
     const local: FileEntry[] = [];
-    const actions = detectCloudAdds(cloud, local, [pd("was-local.md")]);
-    expect(actions).toHaveLength(0);
-  });
-
-  it("excludes children of deleted folders", () => {
-    const cloud = [file("folder/child.md", 2000)];
-    const local: FileEntry[] = [];
-    const actions = detectCloudAdds(cloud, local, [pd("folder/")]);
+    const manifest = new Set(["was-local.md"]);
+    const actions = detectCloudAdds(cloud, local, [], manifest);
     expect(actions).toHaveLength(0);
   });
 
@@ -161,35 +151,36 @@ describe("detectCloudAdds", () => {
   });
 });
 
-// ─── detectLocalDeletes (event-driven) ───
+// ─── detectLocalDeletes (manifest-based) ───
 
 describe("detectLocalDeletes", () => {
-  it("pending delete + cloud file exists → local-delete", () => {
+  it("file in manifest + missing locally + on cloud → local-delete", () => {
     const cloud = [file("deleted-locally.md", 1000)];
     const local: FileEntry[] = [];
-    const actions = detectLocalDeletes(cloud, local, [pd("deleted-locally.md", 2000)]);
+    const manifest = new Set(["deleted-locally.md"]);
+    const actions = detectLocalDeletes(cloud, local, [], manifest);
     expect(actions).toHaveLength(1);
     expect(actions[0].operation).toBe("local-delete");
     expect(actions[0].path).toBe("deleted-locally.md");
   });
 
-  it("pending delete + cloud file modified after delete → re-download (cloud-add)", () => {
-    const cloud = [file("modified-on-cloud.md", 5000)];
-    const local: FileEntry[] = [];
-    // deletedAt=2000 but cloud.mtime=5000 → cloud modified after local delete
-    const actions = detectLocalDeletes(cloud, local, [pd("modified-on-cloud.md", 2000)]);
-    expect(actions).toHaveLength(1);
-    expect(actions[0].operation).toBe("cloud-add");
-  });
-
-  it("pending delete + cloud file already gone → no action", () => {
+  it("file in manifest + missing locally + gone from cloud → no action", () => {
     const cloud: FileEntry[] = [];
     const local: FileEntry[] = [];
-    const actions = detectLocalDeletes(cloud, local, [pd("already-gone.md")]);
+    const manifest = new Set(["already-gone.md"]);
+    const actions = detectLocalDeletes(cloud, local, [], manifest);
     expect(actions).toHaveLength(0);
   });
 
-  it("no pending deletes → no actions", () => {
+  it("file in manifest + still exists locally → no action", () => {
+    const cloud = [file("a.md", 1000)];
+    const local = [file("a.md", 1000)];
+    const manifest = new Set(["a.md"]);
+    const actions = detectLocalDeletes(cloud, local, [], manifest);
+    expect(actions).toHaveLength(0);
+  });
+
+  it("no manifest → no actions (first sync)", () => {
     const cloud = [file("a.md", 1000)];
     const local: FileEntry[] = [];
     const actions = detectLocalDeletes(cloud, local);
@@ -203,7 +194,8 @@ describe("detectCloudDeletes", () => {
   it("cloud-deleted file exists locally → cloud-delete", () => {
     const cloud: FileEntry[] = [];
     const local = [file("deleted-on-cloud.md", 1000)];
-    const actions = detectCloudDeletes(cloud, local, [], ["deleted-on-cloud.md"]);
+    const base = new Set(["deleted-on-cloud.md"]);
+    const actions = detectCloudDeletes(cloud, local, ["deleted-on-cloud.md"], base);
     expect(actions).toHaveLength(1);
     expect(actions[0].operation).toBe("cloud-delete");
     expect(actions[0].path).toBe("deleted-on-cloud.md");
@@ -212,7 +204,23 @@ describe("detectCloudDeletes", () => {
   it("cloud-deleted file not local → no action", () => {
     const cloud: FileEntry[] = [];
     const local: FileEntry[] = [];
-    const actions = detectCloudDeletes(cloud, local, [], ["already-gone.md"]);
+    const base = new Set(["already-gone.md"]);
+    const actions = detectCloudDeletes(cloud, local, ["already-gone.md"], base);
+    expect(actions).toHaveLength(0);
+  });
+
+  it("no base → no cloud deletes (first sync)", () => {
+    const cloud: FileEntry[] = [];
+    const local = [file("safe.md", 1000)];
+    const actions = detectCloudDeletes(cloud, local, ["safe.md"]);
+    expect(actions).toHaveLength(0);
+  });
+
+  it("cloud-deleted file NOT in base → no action (new local file)", () => {
+    const cloud: FileEntry[] = [];
+    const local = [file("new-local.md", 1000)];
+    const base = new Set(["other-file.md"]);
+    const actions = detectCloudDeletes(cloud, local, ["new-local.md"], base);
     expect(actions).toHaveLength(0);
   });
 
@@ -224,33 +232,35 @@ describe("detectCloudDeletes", () => {
   });
 });
 
-// ─── Event-driven delete disambiguation ───
+// ─── Manifest-based delete disambiguation ───
 
-describe("event-driven delete disambiguation", () => {
-  it("file in local only + no pending delete = local-add", () => {
+describe("registry-based delete disambiguation", () => {
+  it("file in local only + not in manifest = local-add (new file)", () => {
     const cloud: FileEntry[] = [];
     const local = [file("new.md", 1000)];
     expect(detectLocalAdds(cloud, local)).toHaveLength(1);
     expect(detectCloudDeletes(cloud, local)).toHaveLength(0);
   });
 
-  it("file in local only + pending delete = excluded from local-add", () => {
+  it("file in local only + in manifest = excluded from local-add (cloud-deleted)", () => {
     const cloud: FileEntry[] = [];
     const local = [file("old.md", 1000)];
-    expect(detectLocalAdds(cloud, local, [pd("old.md")])).toHaveLength(0);
+    const manifest = new Set(["old.md"]);
+    expect(detectLocalAdds(cloud, local, [], manifest)).toHaveLength(0);
   });
 
-  it("file in cloud only + no pending delete = cloud-add", () => {
+  it("file in cloud only + not in manifest = cloud-add (new cloud file)", () => {
     const cloud = [file("cloud-new.md", 1000)];
     const local: FileEntry[] = [];
     expect(detectCloudAdds(cloud, local)).toHaveLength(1);
     expect(detectLocalDeletes(cloud, local)).toHaveLength(0);
   });
 
-  it("file in cloud only + pending delete = local-delete (delete from cloud)", () => {
+  it("file in cloud only + in manifest = local-delete (locally deleted)", () => {
     const cloud = [file("was-here.md", 1000)];
     const local: FileEntry[] = [];
-    expect(detectCloudAdds(cloud, local, [pd("was-here.md")])).toHaveLength(0);
-    expect(detectLocalDeletes(cloud, local, [pd("was-here.md", 2000)])).toHaveLength(1);
+    const manifest = new Set(["was-here.md"]);
+    expect(detectCloudAdds(cloud, local, [], manifest)).toHaveLength(0);
+    expect(detectLocalDeletes(cloud, local, [], manifest)).toHaveLength(1);
   });
 });
