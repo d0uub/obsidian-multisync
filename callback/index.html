@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>MultiSync – Redirecting to Obsidian…</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #1e1e2e; color: #cdd6f4; }
+  .card { text-align: center; padding: 2rem; border-radius: 12px; background: #313244; max-width: 400px; }
+  h2 { margin: 0 0 1rem; }
+  p { margin: 0.5rem 0; color: #a6adc8; }
+  a { color: #89b4fa; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h2>Authorization Complete</h2>
+  <p>Redirecting to Obsidian…</p>
+  <p id="fallback" style="display:none">
+    If Obsidian did not open, <a id="link" href="#">click here</a>.
+  </p>
+</div>
+<script>
+(function() {
+  var params = new URLSearchParams(window.location.search);
+  var code = params.get('code');
+  var error = params.get('error');
+  if (error) {
+    document.querySelector('h2').textContent = 'Authorization Failed';
+    document.querySelector('p').textContent = error;
+    return;
+  }
+  if (!code) {
+    document.querySelector('h2').textContent = 'Missing Code';
+    document.querySelector('p').textContent = 'No authorization code was received.';
+    return;
+  }
+  var uri = 'obsidian://multisync-cb-gdrive?code=' + encodeURIComponent(code);
+  var state = params.get('state');
+  if (state) uri += '&state=' + encodeURIComponent(state);
+  document.getElementById('link').href = uri;
+  setTimeout(function() { document.getElementById('fallback').style.display = 'block'; }, 2000);
+  window.location.href = uri;
+})();
+</script>
+</body>
+</html>
