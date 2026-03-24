@@ -49,8 +49,10 @@ export interface ProviderMeta {
   getMissingCreds(creds: Record<string, string>): string[];
   /** Auto-fill default credentials (e.g., hardcoded app keys) */
   autoFillCreds(creds: Record<string, string>): void;
-  /** Generate OAuth authorization URL */
-  getAuthUrl(creds: Record<string, string>, manual: boolean): Promise<{ authUrl: string; verifier: string }>;
+  /** Generate OAuth authorization URL.
+   *  If codePromise is returned, the caller should await it to get the auth code
+   *  (used by providers that start a loopback server, e.g. GDrive). */
+  getAuthUrl(creds: Record<string, string>, manual: boolean): Promise<{ authUrl: string; verifier: string; codePromise?: Promise<string> }>;
   /** Exchange authorization code for tokens */
   exchangeCode(creds: Record<string, string>, code: string, verifier: string, manual: boolean): Promise<{ accessToken: string; refreshToken: string; expiresIn: number }>;
   /** Create a provider instance */

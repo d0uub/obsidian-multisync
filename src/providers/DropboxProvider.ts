@@ -1,4 +1,4 @@
-import type { ICloudProvider, DeltaChange } from "./ICloudProvider";
+import type { ICloudProvider, DeltaChange, UnsyncableFile } from "./ICloudProvider";
 import type { FileEntry } from "../types";
 import type { ProviderMeta } from "./registry";
 import type { CloudFileEntry } from "../utils/cloudRegistry";
@@ -75,6 +75,7 @@ export const DROPBOX_META: ProviderMeta = {
  */
 export class DropboxProvider implements ICloudProvider {
   readonly kind = "dropbox";
+  unsyncableFiles: UnsyncableFile[] = [];
   private accessToken: string;
   private refreshToken: string;
   private appKey: string;
@@ -110,7 +111,7 @@ export class DropboxProvider implements ICloudProvider {
     this.onTokenRefreshed?.(this.accessToken, this.refreshToken, this.tokenExpiry);
   }
 
-  private async apiRpc(endpoint: string, body: Record<string, unknown>): Promise<any> {
+  private async apiRpc(endpoint: string, body: Record<string, unknown> | null): Promise<any> {
     await this.ensureToken();
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
@@ -121,7 +122,7 @@ export class DropboxProvider implements ICloudProvider {
             Authorization: `Bearer ${this.accessToken}`,
             "Content-Type": "application/json",
           },
-          body: JSON.stringify(body),
+          body: body ? JSON.stringify(body) : "null",
         });
         return resp.json;
       } catch (e: any) {
@@ -179,6 +180,7 @@ export class DropboxProvider implements ICloudProvider {
 
   async listFiles(cloudFolder: string): Promise<FileEntry[]> {
     const entries: FileEntry[] = [];
+    this.unsyncableFiles = [];
     const path = (!cloudFolder || cloudFolder === "/") ? "" : (cloudFolder.startsWith("/") ? cloudFolder : "/" + cloudFolder);
 
     // Ensure the cloud folder exists before listing
@@ -198,6 +200,11 @@ export class DropboxProvider implements ICloudProvider {
           item.path_display.substring(path.length)
         );
         if (!relativePath) continue;
+        // Collect Dropbox Paper files as unsyncable
+        if (relativePath.endsWith(".paper")) {
+          this.unsyncableFiles.push({ path: relativePath, name: relativePath.split("/").pop()!, size: item.size || 0, reason: "Dropbox Paper" });
+          continue;
+        }
         entries.push({
           path: item[".tag"] === "folder" ? relativePath + "/" : relativePath,
           mtime: item.client_modified
@@ -299,7 +306,7 @@ export class DropboxProvider implements ICloudProvider {
 
   async testConnection(): Promise<boolean> {
     try {
-      await this.apiRpc("/users/get_current_account", {});
+      await this.apiRpc("/users/get_current_account", null);
       return true;
     } catch {
       return false;
@@ -410,6 +417,15 @@ export class DropboxProvider implements ICloudProvider {
     }
   }
 
+  async getBaselineDeltaToken(): Promise<string> {
+    const data = await this.apiRpc("/files/list_folder/get_latest_cursor", {
+      path: "",
+      recursive: true,
+      include_deleted: true,
+    });
+    return data.cursor || "";
+  }
+
   /** Parse Dropbox entries into DeltaChange[] */
   private processDropboxDelta(entries: any[], changes: DeltaChange[]): void {
     for (const item of entries) {
@@ -440,10 +456,22 @@ export class DropboxProvider implements ICloudProvider {
 
   async getDisplayName(): Promise<string> {
     try {
-      const account = await this.apiRpc("/users/get_current_account", {});
+      const account = await this.apiRpc("/users/get_current_account", null);
       return account.name?.display_name || "Dropbox";
     } catch {
       return "Dropbox";
+    }
+  }
+
+  async getQuota(): Promise<{ used: number; total: number } | null> {
+    try {
+      const data = await this.apiRpc("/users/get_space_usage", null);
+      const used = data.used ?? 0;
+      const alloc = data.allocation;
+      const total = alloc?.allocated ?? alloc?.individual?.allocated ?? 0;
+      return total > 0 ? { used, total } : null;
+    } catch {
+      return null;
     }
   }
 }

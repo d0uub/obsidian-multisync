@@ -1,4 +1,4 @@
-import type { ICloudProvider, DeltaChange } from "./ICloudProvider";
+import type { ICloudProvider, DeltaChange, UnsyncableFile } from "./ICloudProvider";
 import type { FileEntry } from "../types";
 import type { ProviderMeta } from "./registry";
 import type { CloudFileEntry } from "../utils/cloudRegistry";
@@ -81,6 +81,7 @@ export const ONEDRIVE_META: ProviderMeta = {
  */
 export class OneDriveProvider implements ICloudProvider {
   readonly kind = "onedrive";
+  unsyncableFiles: UnsyncableFile[] = [];
   private accessToken: string;
   private refreshToken: string;
   private clientId: string;
@@ -603,12 +604,29 @@ export class OneDriveProvider implements ICloudProvider {
     }
   }
 
+  async getBaselineDeltaToken(): Promise<string> {
+    const data = await this.graphGetRaw("/me/drive/root/delta?token=latest");
+    const link = (data["@odata.deltaLink"] as string) || "";
+    return link.replace("https://graph.microsoft.com/v1.0", "");
+  }
+
   async getDisplayName(): Promise<string> {
     try {
       const me = await this.graphGet("/me");
       return me.displayName || "OneDrive";
     } catch {
       return "OneDrive";
+    }
+  }
+
+  async getQuota(): Promise<{ used: number; total: number } | null> {
+    try {
+      const drive = await this.graphGet("/me/drive?select=quota");
+      const q = drive.quota;
+      if (q && q.total > 0) return { used: q.used ?? 0, total: q.total };
+      return null;
+    } catch {
+      return null;
     }
   }
 }

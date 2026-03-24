@@ -32,10 +32,26 @@ export const Platform = {
  * requestUrl mock — uses Node fetch when INTEGRATION_TEST env is set,
  * otherwise returns empty (unit test mode).
  */
+
+let _proxyInitialized = false;
+
+function initProxy() {
+  if (_proxyInitialized) return;
+  _proxyInitialized = true;
+  const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || process.env.https_proxy || process.env.http_proxy;
+  if (!proxyUrl) return;
+  try {
+    // undici is bundled with Node.js 22+
+    const { ProxyAgent, setGlobalDispatcher } = require("undici");
+    setGlobalDispatcher(new ProxyAgent(proxyUrl));
+  } catch { /* proxy not available, proceed without */ }
+}
+
 export async function requestUrl(opts: any): Promise<any> {
   if (!process.env.INTEGRATION_TEST) {
     return { json: {}, arrayBuffer: new ArrayBuffer(0), headers: {} };
   }
+  initProxy();
   // Real HTTP via Node fetch for integration tests
   const { url, method = "GET", headers = {}, body } = opts;
   const fetchOpts: RequestInit = { method, headers };

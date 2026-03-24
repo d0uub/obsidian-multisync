@@ -31,6 +31,8 @@ export interface CloudAccount {
   name: string;
   /** OAuth tokens / credentials (provider-specific) */
   credentials: Record<string, string>;
+  /** Delta tokens keyed by driveId ("me" = own drive, others = shared drives) */
+  deltaTokens?: Record<string, string>;
 }
 
 /**
@@ -90,19 +92,24 @@ export interface MultiSyncSettings {
   rules: SyncRule[];
   /** User-defined pipeline ordering (advanced mode) */
   pipeline: SyncStep[];
-  /** Delta tokens for incremental cloud change tracking. Keyed by accountId */
-  deltaTokens: Record<string, string>;
+  /** @deprecated Migrated into account.deltaTokens */
+  deltaTokens?: Record<string, string>;
   /** Use advanced pipeline mode instead of standard order */
   advancedMode: boolean;
   /** Max concurrent file transfers (1-10, default 4) */
   concurrency: number;
+  /** Download cloud copy to vault trash before deleting from cloud (default: true) */
+  backupBeforeCloudDelete: boolean;
+  /** Max file size in MB for sync (files larger are skipped). Desktop default 200, mobile default 20. */
+  maxFileSizeMB: number;
 }
 
 export const DEFAULT_SETTINGS: MultiSyncSettings = {
   accounts: [],
   rules: [],
   pipeline: [],
-  deltaTokens: {},
   advancedMode: false,
   concurrency: 4,
+  backupBeforeCloudDelete: false,
+  maxFileSizeMB: 200,
 };

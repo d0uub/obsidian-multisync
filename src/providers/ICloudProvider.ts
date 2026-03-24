@@ -1,6 +1,18 @@
 import type { FileEntry } from "../types";
 import type { CloudFileEntry } from "../utils/cloudRegistry";
 
+/** A file that exists on cloud but cannot be synced (native format, unsupported type, etc.) */
+export interface UnsyncableFile {
+  /** Path relative to cloud folder root */
+  path: string;
+  /** Display name */
+  name: string;
+  /** Size in bytes (0 if unknown) */
+  size: number;
+  /** Reason it can't be synced */
+  reason: string;
+}
+
 /** A single delta change from the cloud provider */
 export interface DeltaChange {
   /** Cloud-provider-specific unique ID */
@@ -21,6 +33,9 @@ export interface DeltaChange {
 export interface ICloudProvider {
   /** Provider kind identifier */
   readonly kind: string;
+
+  /** Files found on cloud that cannot be synced (native formats, unsupported types). Populated by listFiles(). */
+  unsyncableFiles: UnsyncableFile[];
 
   /**
    * List all files/folders recursively under the cloud root folder.
@@ -100,7 +115,20 @@ export interface ICloudProvider {
   syncAccountDelta(deltaToken: string): Promise<{ changes: DeltaChange[]; newDeltaToken: string; isFullEnum: boolean }>;
 
   /**
+   * Get a baseline delta token without enumerating files.
+   * Used when the registry is populated via listFiles() and we just need a token
+   * to track future incremental changes.
+   */
+  getBaselineDeltaToken(): Promise<string>;
+
+  /**
    * Human-readable display name for this provider instance.
    */
   getDisplayName(): Promise<string>;
+
+  /**
+   * Get storage quota info.
+   * Returns used/total in bytes, or null if unsupported.
+   */
+  getQuota(): Promise<{ used: number; total: number } | null>;
 }

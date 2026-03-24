@@ -31,6 +31,8 @@ export interface CloudRegistryRecord {
   entries: CloudFileEntry[];
   /** Epoch ms when this registry was last saved (i.e. last successful sync) */
   lastSyncAt: number;
+  /** Files that exist on cloud but cannot be synced (native format, too large, etc.) */
+  unsyncable?: { path: string; name: string; size: number; reason: string }[];
 }
 
 const DB_NAME = "multisync-cloud-registry";
@@ -52,8 +54,12 @@ function openDB(): Promise<IDBDatabase> {
 }
 
 /** Save the full cloud file list for an account (records sync timestamp). */
-export async function saveCloudRegistry(accountId: string, entries: CloudFileEntry[]): Promise<void> {
-  const record: CloudRegistryRecord = { entries, lastSyncAt: Date.now() };
+export async function saveCloudRegistry(
+  accountId: string,
+  entries: CloudFileEntry[],
+  unsyncable?: { path: string; name: string; size: number; reason: string }[]
+): Promise<void> {
+  const record: CloudRegistryRecord = { entries, lastSyncAt: Date.now(), unsyncable: unsyncable || [] };
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, "readwrite");
@@ -109,6 +115,13 @@ export function buildIdToPathMap(entries: CloudFileEntry[]): Record<string, stri
   return map;
 }
 
+/** Load unsyncable files for an account. Returns empty array if not found. */
+export async function loadUnsyncableFiles(accountId: string): Promise<{ path: string; name: string; size: number; reason: string }[]> {
+  const raw = await loadCloudRegistryRaw(accountId);
+  if (!raw || Array.isArray(raw)) return [];
+  return raw.unsyncable || [];
+}
+
 /**
  * Apply delta changes to the stored registry for an account.
  * If isFullEnum is true, the changes represent the complete file list (replaces stored list).
@@ -149,7 +162,14 @@ export async function applyDeltaChanges(
           if (existingId) byId.delete(existingId);
         }
       } else if (c.entry) {
-        byId.set(c.id, c.entry);
+        // If hash matches existing entry, keep the existing mtime
+        // (avoids false-positive updates when cloud mtime changes without content change)
+        const existing = byId.get(c.id);
+        if (existing && c.entry.hash && existing.hash === c.entry.hash) {
+          byId.set(c.id, { ...c.entry, mtime: existing.mtime });
+        } else {
+          byId.set(c.id, c.entry);
+        }
       }
     }
     entries = Array.from(byId.values());

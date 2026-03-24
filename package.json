@@ -5,7 +5,7 @@
   "author": "d0uub",
   "main": "main.js",
   "scripts": {
-    "dev": "node esbuild.config.mjs \"D:/obsidian/.obsidian/plugins/obsidian-multisync\"",
+    "dev": "node esbuild.config.mjs",
     "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
     "test": "vitest run",
     "test:integration": "set INTEGRATION_TEST=1 && vitest run tests/integration",
@@ -14,6 +14,7 @@
   "devDependencies": {
     "@types/node": "^20.19.37",
     "esbuild": "^0.23.0",
+    "fake-indexeddb": "^6.2.5",
     "obsidian": "^1.5.7",
     "tslib": "^2.6.3",
     "typescript": "^5.5.4",

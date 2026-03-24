@@ -1,3 +1,4 @@
+
 import {
   App,
   Modal,
@@ -32,10 +33,29 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
   plugin: MultiSyncPlugin;
   private dragSourceIndex: number = -1;
   private expandedSteps = new Set<number>();
+  private quotaCache = new Map<string, { used: number; total: number } | null>();
+
 
   constructor(app: App, plugin: MultiSyncPlugin) {
     super(app, plugin);
     this.plugin = plugin;
+  }
+
+  /**
+   * Ensure account exists for a rule, or remove it if unused.
+   * @param accountId The account id to check
+   * @param ensurePresent If true, ensure account exists; if false, remove if unused
+   * @param type Optional type for creation
+   */
+
+  async ensureAccountSync(accountId: string, ensurePresent: boolean, type?: CloudProviderType) {
+    if (!ensurePresent) {
+      // Wipe delta token + registry for the account — next sync will re-fetch
+      const acct = this.plugin.settings.accounts.find(a => a.id === accountId);
+      if (acct) acct.deltaTokens = undefined;
+      deleteCloudRegistry(accountId).catch(() => {});
+      await this.plugin.saveSettings();
+    }
   }
 
   /* ------------------------------------------------------------------ */
@@ -59,6 +79,10 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
   /* ------------------------------------------------------------------ */
   /*  display()                                                          */
   /* ------------------------------------------------------------------ */
+
+  hide(): void {
+    this.quotaCache.clear();
+  }
 
   display(): void {
     const { containerEl } = this;
@@ -119,16 +143,26 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
           })
       );
 
+    // Backup before cloud delete — hidden (default off, cloud has its own trash)
+    // this.plugin.settings.backupBeforeCloudDelete is respected if already set
+
+    const isMobile = (this.app as any).isMobile || typeof (globalThis as any).capacitor !== "undefined";
+    const maxLimit = isMobile ? 20 : 200;
+    const curMax = Math.min(this.plugin.settings.maxFileSizeMB || maxLimit, maxLimit);
     new Setting(syncItems)
-      .setName("Advanced Mode")
-      .setDesc("Fully customize sync operations and ordering.")
-      .addToggle((toggle) =>
-        toggle.setValue(this.plugin.settings.advancedMode).onChange(async (val) => {
-          this.plugin.settings.advancedMode = val;
-          await this.plugin.saveSettings();
-          this.display();
-        })
+      .setName("Max file size")
+      .setDesc(`${curMax} MB — files larger will be skipped during sync`)
+      .addSlider((slider) =>
+        slider.setLimits(1, maxLimit, 1)
+          .setValue(curMax)
+          .onChange(async (val) => {
+            this.plugin.settings.maxFileSizeMB = val;
+            await this.plugin.saveSettings();
+            this.display();
+          })
       );
+
+    // Advanced Mode — hidden (pro feature)
 
     if (this.plugin.settings.advancedMode) {
       for (let i = 0; i < this.plugin.settings.pipeline.length; i++) {
@@ -180,8 +214,7 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
       const ruleIds = new Set(this.plugin.settings.rules.map((r) => r.id));
       this.plugin.settings.pipeline =
         this.plugin.settings.pipeline.filter((s) => ruleIds.has(s.ruleId));
-      // Clean up delta token and IndexedDB registry for the removed account
-      delete this.plugin.settings.deltaTokens?.[account.id];
+      // Clean up IndexedDB registry for the removed account
       deleteCloudRegistry(account.id).catch(() => {});
       await this.plugin.saveSettings();
       this.plugin.initProviders();
@@ -264,6 +297,50 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
         this.plugin.initProviders();
         this.display();
       });
+
+      // Reset sync state (delta token + registry)
+      this.createClickableIcon(row, "rotate-ccw", "Reset sync state", async () => {
+        if (account.deltaTokens) {
+          delete account.deltaTokens["me"];
+        }
+        deleteCloudRegistry(account.id).catch(() => {});
+        await this.plugin.saveSettings();
+        new Notice(`${account.name}: Sync state reset — next sync will re-scan`);
+      });
+
+      // ── Quota fuel bar ──
+      const provider = this.plugin.providers.get(account.id);
+      if (provider) {
+        const barWrap = document.createElement("div");
+        barWrap.className = "multisync-quota-bar";
+        barWrap.style.cssText = "padding:2px 0 6px 40px;";
+        row.insertAdjacentElement("afterend", barWrap);
+
+        const renderBar = (q: { used: number; total: number } | null) => {
+          if (!q) { barWrap.remove(); return; }
+          const pct = Math.min(100, Math.round((q.used / q.total) * 100));
+          const usedGB = (q.used / 1e9).toFixed(1);
+          const totalGB = (q.total / 1e9).toFixed(1);
+          const color = pct > 90 ? "var(--text-error)" : pct > 70 ? "var(--text-warning)" : "var(--interactive-accent)";
+          barWrap.innerHTML = `
+            <div style="display:flex;align-items:center;gap:8px;font-size:11px;color:var(--text-muted);">
+              <div style="flex:1;height:6px;border-radius:3px;background:var(--background-modifier-border);overflow:hidden;">
+                <div style="width:${pct}%;height:100%;border-radius:3px;background:${color};transition:width 0.3s;"></div>
+              </div>
+              <span>${usedGB} / ${totalGB} GB (${pct}%)</span>
+            </div>`;
+        };
+
+        // Use cached quota if available; only fetch once per settings open
+        if (this.quotaCache.has(account.id)) {
+          renderBar(this.quotaCache.get(account.id)!);
+        } else {
+          provider.getQuota().then((q) => {
+            this.quotaCache.set(account.id, q);
+            renderBar(q);
+          }).catch((e) => { console.error("getQuota error:", e); barWrap.remove(); });
+        }
+      }
     } else {
       this.createClickableIcon(row, "log-in", "Authorize", async () => {
         await this.startOAuthFlow(account);
@@ -279,37 +356,46 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
   }
 
   private renderAddAccountRow(containerEl: HTMLElement) {
-    let newName = "";
+    const MAX_ACCOUNTS = 3;
+    if (this.plugin.settings.accounts.length >= MAX_ACCOUNTS) {
+      const note = new Setting(containerEl)
+        .setName("Account limit reached")
+        .setDesc(`Free version supports up to ${MAX_ACCOUNTS} cloud accounts.`);
+      note.settingEl.style.opacity = "0.6";
+      return;
+    }
+
     let newType: CloudProviderType = "dropbox";
 
-    const s = new Setting(containerEl).setName("Add account");
+    const s = new Setting(containerEl).setName("");
+    s.controlEl.style.justifyContent = "space-between";
+    s.controlEl.style.width = "100%";
 
-    s.addText((text) =>
-      text.setPlaceholder("Account Name").setValue(newName).onChange((val) => {
-        newName = val;
-      })
-    );
-
-    // Vendor icon next to dropdown
-    const iconSpan = document.createElement("span");
-    iconSpan.className = "multisync-inline-icon";
-    iconSpan.style.cssText = "display:inline-flex;vertical-align:middle;margin-right:4px;";
-    iconSpan.innerHTML = PROVIDERS[newType]?.svgIcon || '';
-
-    s.addDropdown((dd) => {
-      dd.selectEl.parentElement?.insertBefore(iconSpan, dd.selectEl);
-      for (const meta of PROVIDER_LIST) dd.addOption(meta.type, meta.label);
-      dd.setValue(newType);
-      dd.onChange((val) => {
-        newType = val as CloudProviderType;
-        iconSpan.innerHTML = PROVIDERS[newType]?.svgIcon || '';
+    // Icon-based provider selector
+    const selectorRow = s.controlEl.createDiv({ cls: "multisync-provider-selector" });
+    selectorRow.style.cssText = "display:inline-flex;gap:6px;align-items:center;margin-right:8px;";
+    const iconButtons: HTMLElement[] = [];
+    for (const meta of PROVIDER_LIST) {
+      const btn = selectorRow.createDiv({ cls: "multisync-provider-icon", attr: { "aria-label": meta.label } });
+      btn.style.cssText = "cursor:pointer;padding:4px 8px;border-radius:6px;display:inline-flex;align-items:center;transition:background 0.15s;";
+      btn.innerHTML = meta.svgIcon;
+      // Scale icon
+      const svg = btn.querySelector("svg");
+      if (svg) { svg.setAttribute("width", "20"); svg.setAttribute("height", "20"); }
+      if (meta.type === newType) btn.style.background = "var(--interactive-accent)";
+      btn.title = meta.label;
+      btn.addEventListener("click", () => {
+        newType = meta.type as CloudProviderType;
+        for (const b of iconButtons) b.style.background = "";
+        btn.style.background = "var(--interactive-accent)";
       });
-    });
+      iconButtons.push(btn);
+    }
 
     s.addButton((btn) =>
       btn.setButtonText("+").setCta().onClick(async () => {
-        // Auto-generate a unique name if the user didn't provide one
-        const baseName = newName.trim() || (PROVIDERS[newType]?.label || newType);
+        // Use provider label as temporary name; will be replaced after OAuth with display name
+        const baseName = PROVIDERS[newType]?.label || newType;
         const existingNames = new Set(this.plugin.settings.accounts.map(a => a.name));
         let finalName = baseName;
         if (existingNames.has(finalName)) {
@@ -324,10 +410,20 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
           name: finalName,
           credentials: {},
         };
+        // Auto-fill default credentials (e.g., hardcoded client IDs)
+        const meta = PROVIDERS[newType];
+        if (meta) meta.autoFillCreds(newAccount.credentials);
         this.plugin.settings.accounts.push(newAccount);
         await this.plugin.saveSettings();
         this.plugin.initProviders();
-        this.display();
+
+        // Auto-start OAuth if no credentials are needed upfront
+        if (meta && meta.getMissingCreds(newAccount.credentials).length === 0) {
+          this.display();
+          await this.startOAuthFlow(newAccount);
+        } else {
+          this.display();
+        }
       })
     );
   }
@@ -358,7 +454,7 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
   /*  Rules                                                              */
   /* ------------------------------------------------------------------ */
 
-  private renderRule(containerEl: HTMLElement, rule: SyncRule, index: number) {
+  private async renderRule(containerEl: HTMLElement, rule: SyncRule, index: number) {
     const account = this.plugin.settings.accounts.find(
       (a) => a.id === rule.accountId
     );
@@ -367,137 +463,36 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
 
     // ── Remove icon (cascade delete) ──
     this.createRemoveIcon(row, async () => {
+      // Remove the rule
       this.plugin.settings.rules =
         this.plugin.settings.rules.filter((r) => r.id !== rule.id);
       this.plugin.settings.pipeline =
         this.plugin.settings.pipeline.filter((s) => s.ruleId !== rule.id);
+      await this.ensureAccountSync(rule.accountId, false);
       await this.plugin.saveSettings();
       this.display();
     });
 
-    // ── Vendor icon ──
+    // Vendor icon at far left of row
     if (account) {
       const vendorIcon = row.createSpan({ cls: "mobile-option-setting-item-option-icon" });
       vendorIcon.innerHTML = PROVIDERS[account.type]?.svgIcon || '';
+      // Move icon to be the first child after remove icon
+      if (row.childNodes.length > 1 && row.childNodes[1] !== vendorIcon) {
+        row.insertBefore(vendorIcon, row.childNodes[1]);
+      }
     }
-
-    // ── Name area with inline-editable paths ──
+    // Name area: show mapping with folder icon, no dropdown or inline edit
     const nameSpan = row.createSpan({ cls: "mobile-option-setting-item-name" });
-
-    // Account selector (inline dropdown)
-    const accountSelect = nameSpan.createEl("select", { cls: "dropdown" });
-    accountSelect.style.cssText = "border:none;background:transparent;font-weight:600;font-size:inherit;color:inherit;padding:0;margin-right:4px;cursor:pointer;";
-    for (const a of this.plugin.settings.accounts) {
-      const opt = accountSelect.createEl("option", { text: a.name, value: a.id });
-      if (a.id === rule.accountId) opt.selected = true;
-    }
-    accountSelect.addEventListener("change", async () => {
-      rule.accountId = accountSelect.value;
-      await this.plugin.saveSettings();
-      this.display();
-    });
-
-    nameSpan.createEl("span", { text: ": " });
-
-    // Cloud folder (click-to-edit with input box)
-    const cloudLabel = nameSpan.createEl("span", { text: rule.cloudFolder || "(drive root)" });
-    cloudLabel.style.cursor = "pointer";
-    cloudLabel.title = "Click to edit";
-
-    let cloudEditing = false;
-
-    cloudLabel.addEventListener("click", () => {
-      if (cloudEditing) return;
-      cloudEditing = true;
-      cloudLabel.style.display = "none";
-
-      const inputWrapper = nameSpan.insertBefore(document.createElement("span"), cloudLabel.nextSibling);
-      inputWrapper.style.display = "inline-block";
-      inputWrapper.style.verticalAlign = "middle";
-
-      const textInput = document.createElement("input");
-      textInput.type = "text";
-      textInput.placeholder = "Cloud folder";
-      textInput.value = rule.cloudFolder || "";
-      textInput.style.cssText = "width:120px;font-size:inherit;";
-      inputWrapper.appendChild(textInput);
-      textInput.focus();
-
-      const finish = async () => {
-        cloudEditing = false;
-        const val = textInput.value.trim();
-        const newFolder = val.replace(/^\/+/, "");
-        if (newFolder !== rule.cloudFolder) {
-          rule.cloudFolder = newFolder;
-          // Clear delta token when cloud folder changes (forces re-enumeration)
-          delete this.plugin.settings.deltaTokens[rule.accountId];
-        }
-        cloudLabel.textContent = rule.cloudFolder || "(drive root)";
-        inputWrapper.remove();
-        cloudLabel.style.display = "";
-        await this.plugin.saveSettings();
-      };
-
-      textInput.addEventListener("blur", finish);
-      textInput.addEventListener("keydown", (e: KeyboardEvent) => {
-        if (e.key === "Enter") { e.preventDefault(); textInput.blur(); }
-        else if (e.key === "Escape") { textInput.value = rule.cloudFolder; textInput.blur(); }
-      });
-    });
-
-    nameSpan.createEl("span", { text: " ↔ " });
-
-    // Local folder (click-to-edit with FolderSuggest)
+    const accountName = account ? account.name : rule.accountId;
+    nameSpan.createEl("span", { text: `${accountName}: ${rule.cloudFolder || "(drive root)"} ↔ ` });
+    // Folder icon before local folder
     const folderIcon = nameSpan.createSpan();
     setIcon(folderIcon, "folder");
     folderIcon.style.display = "inline-flex";
     folderIcon.style.verticalAlign = "middle";
     folderIcon.style.marginRight = "2px";
-
-    const localLabel = nameSpan.createEl("span", { text: rule.localFolder || "(entire vault)" });
-    localLabel.style.cursor = "pointer";
-    localLabel.title = "Click to edit";
-
-    let localEditing = false;
-
-    localLabel.addEventListener("click", () => {
-      if (localEditing) return;
-      localEditing = true;
-      localLabel.style.display = "none";
-
-      const searchWrapper = nameSpan.createDiv({ cls: "search-input-container" });
-      searchWrapper.style.display = "inline-block";
-      searchWrapper.style.width = "140px";
-      searchWrapper.style.verticalAlign = "middle";
-
-      const searchInput = searchWrapper.createEl("input", {
-        type: "search",
-        attr: { placeholder: "Type to search vault folders...", enterkeyhint: "done" },
-      });
-      searchInput.value = rule.localFolder || "";
-      searchInput.focus();
-
-      new FolderSuggest(this.app, searchInput);
-
-      const finish = async () => {
-        localEditing = false;
-        const val = searchInput.value.trim();
-        const newFolder = val === "(entire vault)" ? "" : val.replace(/^\/+/, "");
-        if (newFolder !== rule.localFolder) {
-          rule.localFolder = newFolder;
-        }
-        localLabel.textContent = rule.localFolder || "(entire vault)";
-        searchWrapper.remove();
-        localLabel.style.display = "";
-        await this.plugin.saveSettings();
-      };
-
-      searchInput.addEventListener("blur", () => setTimeout(finish, 150));
-      searchInput.addEventListener("keydown", (e: KeyboardEvent) => {
-        if (e.key === "Enter") { e.preventDefault(); searchInput.blur(); }
-        else if (e.key === "Escape") { searchInput.value = rule.localFolder; searchInput.blur(); }
-      });
-    });
+    nameSpan.createEl("span", { text: rule.localFolder || "(entire vault)" });
 
     // ── Drag handle (hidden in advanced mode — pipeline controls ordering) ──
     if (!this.plugin.settings.advancedMode) {
@@ -538,11 +533,26 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
   }
 
   private renderAddRuleRow(containerEl: HTMLElement) {
+    const MAX_RULES = 3;
+    if (this.plugin.settings.rules.length >= MAX_RULES) {
+      const note = new Setting(containerEl)
+        .setName("Rule limit reached")
+        .setDesc(`Free version supports up to ${MAX_RULES} sync rules.`);
+      note.settingEl.style.opacity = "0.6";
+      return;
+    }
+
     let newAccountId = this.plugin.settings.accounts[0]?.id || "";
     let newCloudFolder = "";
     let newLocalFolder = "";
 
-    const s = new Setting(containerEl).setName("Add Mapping");
+    const s = new Setting(containerEl).setName("");
+    s.controlEl.style.justifyContent = "space-between";
+    s.controlEl.style.width = "100%";
+
+    // Left group for inputs
+    const leftGroup = s.controlEl.createDiv();
+    leftGroup.style.cssText = "display:flex;align-items:center;gap:6px;flex-wrap:wrap;";
 
     const firstAccount = this.plugin.settings.accounts[0];
     const ruleIconSpan = document.createElement("span");
@@ -578,8 +588,24 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
       new FolderSuggest(this.app, search.inputEl);
     });
 
+    // Move inputs into leftGroup (they were appended to controlEl by Setting API)
+    const controls = Array.from(s.controlEl.children).filter(c => c !== leftGroup);
+    // Move all except the last child (which will be the "+" button added next)
+    for (const c of controls) leftGroup.appendChild(c);
+
     s.addButton((btn) =>
       btn.setButtonText("+").setCta().onClick(async () => {
+        // Ensure account exists for this mapping
+        let type: CloudProviderType = "dropbox";
+        const accFromDropdown = this.plugin.settings.accounts[0];
+        if (accFromDropdown && accFromDropdown.id === newAccountId) {
+          type = accFromDropdown.type;
+        }
+        // Reset delta for this account so next sync re-fetches with new folder included
+        const acctForMapping = this.plugin.settings.accounts.find(a => a.id === newAccountId);
+        if (acctForMapping) acctForMapping.deltaTokens = undefined;
+        deleteCloudRegistry(newAccountId).catch(() => {});
+        await this.ensureAccountSync(newAccountId, true, type);
         const newRule: SyncRule = {
           id: "rule-" + Date.now(),
           accountId: newAccountId,
@@ -735,6 +761,12 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
   }
 
   private async startOAuthFlow(account: CloudAccount) {
+    // Show native type warning for GDrive before OAuth
+    if (account.type === "gdrive") {
+      const ok = await this.showGDriveWarning();
+      if (!ok) return;
+    }
+
     const missing = this.getMissingCredFields(account);
     if (missing.length > 0) {
       new Notice(`Set ${missing.join(", ")} in credentials first.`);
@@ -750,11 +782,13 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
 
     let authUrl: string;
     let verifier: string;
+    let codePromise: Promise<string> | undefined;
 
     try {
       const r = await meta.getAuthUrl(account.credentials, manual);
       authUrl = r.authUrl;
       verifier = r.verifier;
+      codePromise = r.codePromise;
     } catch (e: any) {
       new Notice(`OAuth error: ${e?.message || e}`);
       return;
@@ -762,7 +796,41 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
 
     this.plugin.oauth2Info = { verifier, accountId: account.id, manual };
 
-    if (manual) {
+    if (codePromise) {
+      // Loopback flow (GDrive): open browser and auto-capture code via localhost server
+      window.open(authUrl);
+      new Notice("Browser opened for authorization. Waiting for redirect...");
+      const code = await codePromise;
+      if (!code) {
+        new Notice("Authorization failed or was cancelled.");
+        this.plugin.oauth2Info = {};
+        return;
+      }
+      try {
+        const result = await meta.exchangeCode(account.credentials, code, verifier, false);
+        account.credentials.accessToken = result.accessToken;
+        account.credentials.refreshToken = result.refreshToken;
+        account.credentials.tokenExpiry = String(Date.now() + result.expiresIn * 1000 - 60000);
+        await this.plugin.saveSettings();
+        this.plugin.initProviders();
+        // Auto-name account from cloud identity
+        const provider = this.plugin.providers.get(account.id);
+        if (provider) {
+          try {
+            const name = await provider.getDisplayName();
+            if (name && name !== account.name) {
+              account.name = name;
+              await this.plugin.saveSettings();
+            }
+          } catch { /* keep existing name */ }
+        }
+        new Notice(`${account.name} connected!`);
+        this.display();
+      } catch (e: any) {
+        new Notice(`Auth failed: ${e?.message || e}`);
+      }
+      this.plugin.oauth2Info = {};
+    } else if (manual) {
       new AuthCodeModal(this.app, this.plugin, account, verifier, authUrl).open();
     } else {
       window.open(authUrl);
@@ -773,6 +841,32 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
   private getMissingCredFields(account: CloudAccount): string[] {
     const meta = PROVIDERS[account.type];
     return meta ? meta.getMissingCreds(account.credentials) : [];
+  }
+
+  private showGDriveWarning(): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      const modal = new Modal(this.app);
+      let resolved = false;
+      modal.titleEl.setText("Google Drive Sync (Experimental)");
+      modal.contentEl.createEl("p", {
+        text: "Google Drive sync is experimental. Please note the following limitations:",
+      });
+      const list = modal.contentEl.createEl("ul");
+      list.createEl("li", {
+        text: "Google native files (Docs, Sheets, Slides, etc.) are not supported and will be skipped.",
+      });
+      list.createEl("li", {
+        text: "Duplicate file or folder names in the same directory are not supported and may cause sync issues.",
+      });
+      const btnRow = modal.contentEl.createEl("div");
+      btnRow.style.display = "flex";
+      btnRow.style.justifyContent = "flex-end";
+      btnRow.style.marginTop = "16px";
+      const okBtn = btnRow.createEl("button", { text: "OK", cls: "mod-cta" });
+      okBtn.onclick = () => { resolved = true; modal.close(); };
+      modal.onClose = () => { resolve(resolved); };
+      modal.open();
+    });
   }
 }
 
@@ -848,9 +942,18 @@ class AuthCodeModal extends Modal {
     creds.tokenExpiry = String(Date.now() + r.expiresIn * 1000 - 60000);
     await this.plugin.saveSettings();
     this.plugin.initProviders();
+    // Auto-name account from cloud identity
+    const provider = this.plugin.providers.get(this.account.id);
+    if (provider) {
+      try {
+        const name = await provider.getDisplayName();
+        if (name && name !== this.account.name) {
+          this.account.name = name;
+          await this.plugin.saveSettings();
+        }
+      } catch { /* keep existing name */ }
+    }
     this.plugin.settingsTab?.display();
-    // Pre-fetch full file list for the newly connected account
-    this.plugin.prefetchAccountDelta(this.account.id);
   }
 
   onClose() {

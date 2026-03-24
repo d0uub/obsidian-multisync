@@ -7,13 +7,21 @@ import { resolveConflict } from "./merger";
  * Uses manifest-based delete detection and account-level delta sync.
  */
 
-/** Index a file list by path for O(1) lookup */
+/** Index a file list by path for O(1) lookup (case-insensitive for cloud compatibility) */
 function indexByPath(entries: FileEntry[]): Map<string, FileEntry> {
   const map = new Map<string, FileEntry>();
   for (const e of entries) {
-    map.set(e.path, e);
+    map.set(e.path.toLowerCase(), e);
   }
   return map;
+}
+
+/** Case-insensitive path lookup helper */
+function hasPath(map: Map<string, FileEntry>, path: string): boolean {
+  return map.has(path.toLowerCase());
+}
+function getPath(map: Map<string, FileEntry>, path: string): FileEntry | undefined {
+  return map.get(path.toLowerCase());
 }
 
 /**
@@ -27,7 +35,7 @@ export function detectLocalUpdates(
   const actions: SyncAction[] = [];
   for (const local of localList) {
     if (local.isFolder) continue;
-    const cloud = cloudMap.get(local.path);
+    const cloud = getPath(cloudMap, local.path);
     if (!cloud || cloud.isFolder) continue;
     const decision = resolveConflict(local, cloud);
     if (decision === "local-update") {
@@ -55,7 +63,7 @@ export function detectCloudUpdates(
   const actions: SyncAction[] = [];
   for (const cloud of cloudList) {
     if (cloud.isFolder) continue;
-    const local = localMap.get(cloud.path);
+    const local = getPath(localMap, cloud.path);
     if (!local || local.isFolder) continue;
     const decision = resolveConflict(local, cloud);
     if (decision === "cloud-update") {
@@ -84,9 +92,9 @@ export function detectLocalAdds(
   const cloudMap = indexByPath(cloudList);
   const actions: SyncAction[] = [];
   for (const local of localList) {
-    if (cloudMap.has(local.path)) continue;
+    if (hasPath(cloudMap, local.path)) continue;
     // File was previously synced but now missing from cloud → cloud-deleted, don't re-upload
-    if (syncBase && syncBase.has(local.path)) continue;
+    if (syncBase && syncBase.has(local.path.toLowerCase())) continue;
     actions.push({
       operation: "local-add",
       path: local.path,
@@ -110,9 +118,9 @@ export function detectCloudAdds(
   const localMap = indexByPath(localList);
   const actions: SyncAction[] = [];
   for (const cloud of cloudList) {
-    if (localMap.has(cloud.path)) continue;
+    if (hasPath(localMap, cloud.path)) continue;
     // File was previously synced but now missing locally → locally deleted, don't re-download
-    if (syncBase && syncBase.has(cloud.path)) continue;
+    if (syncBase && syncBase.has(cloud.path.toLowerCase())) continue;
     actions.push({
       operation: "cloud-add",
       path: cloud.path,
@@ -138,9 +146,9 @@ export function detectLocalDeletes(
   const localMap = indexByPath(localList);
   const actions: SyncAction[] = [];
   for (const basePath of syncBase) {
-    if (localMap.has(basePath)) continue; // still exists locally
+    if (localMap.has(basePath)) continue; // still exists locally (basePath already lowercase)
     const cloud = cloudMap.get(basePath);
-    if (!cloud) continue; // already gone from cloud too
+    if (!cloud) continue; // already gone from cloud too (cloudMap keyed by lowercase)
     // Was synced before, now missing locally, still on cloud → local deletion
     actions.push({
       operation: "local-delete",
@@ -179,24 +187,25 @@ export function detectCloudDeletes(
   if (diffMode) {
     for (const [localPath, local] of localMap) {
       if (local.isFolder) continue;
-      if (cloudMap.has(localPath)) continue; // still on cloud
-      if (!syncBase.has(localPath)) continue; // never synced → new local file
+      if (cloudMap.has(localPath)) continue; // still on cloud (already lowercase keyed)
+      if (!syncBase.has(localPath)) continue; // never synced → new local file (already lowercase keyed)
       actions.push({
         operation: "cloud-delete",
-        path: localPath,
+        path: local.path,
         isFolder: false,
         sourceEntry: local,
       });
     }
   } else {
     for (const deletedPath of cloudDeletedPaths) {
-      if (cloudMap.has(deletedPath)) continue; // re-created on cloud — skip
+      const dpLower = deletedPath.toLowerCase();
+      if (cloudMap.has(dpLower)) continue; // re-created on cloud — skip
       // Try exact match, then with/without trailing slash for folders
-      let local = localMap.get(deletedPath);
-      if (!local) local = localMap.get(deletedPath + "/");
-      if (!local) local = localMap.get(deletedPath.replace(/\/$/, ""));
+      let local = localMap.get(dpLower);
+      if (!local) local = localMap.get(dpLower + "/");
+      if (!local) local = localMap.get(dpLower.replace(/\/$/, ""));
       if (!local) continue; // already gone locally — skip
-      const basePath = syncBase.has(deletedPath) || syncBase.has(deletedPath + "/") || syncBase.has(deletedPath.replace(/\/$/, ""));
+      const basePath = syncBase.has(dpLower) || syncBase.has(dpLower + "/") || syncBase.has(dpLower.replace(/\/$/, ""));
       if (!basePath) continue; // never synced → new local file
       actions.push({
         operation: "cloud-delete",
