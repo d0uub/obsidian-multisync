@@ -1,5 +1,5 @@
 // ============================================================
-// Core types for obsidian-multisync
+// Core types for multisync
 // ============================================================
 
 /** Represents a single file/folder entry from either local or cloud */

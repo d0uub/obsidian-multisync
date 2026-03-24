@@ -29,7 +29,7 @@ if (!VAULT) {
 
 const CDP_PORT = 9222;
 const SETTLE_MS = 3000;
-const PLUGIN = `app.plugins.plugins["obsidian-multisync"]`;
+const PLUGIN = `app.plugins.plugins["multisync"]`;
 
 // ── CDP helpers ──
 
@@ -331,9 +331,9 @@ async function main() {
   // Reload plugin to pick up latest build
   console.log("Reloading plugin...");
   await evaluate(`(async () => {
-    await app.plugins.disablePlugin("obsidian-multisync");
+    await app.plugins.disablePlugin("multisync");
     await new Promise(r => setTimeout(r, 500));
-    await app.plugins.enablePlugin("obsidian-multisync");
+    await app.plugins.enablePlugin("multisync");
     await new Promise(r => setTimeout(r, 1000));
     return "reloaded";
   })()`);

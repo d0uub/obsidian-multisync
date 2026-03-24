@@ -31,7 +31,7 @@ const SETTLE_MS = 3000;
 // ── Helpers ──
 
 function loadSettings(): MultiSyncSettings {
-  const dataPath = path.resolve(VAULT_PATH, ".obsidian/plugins/obsidian-multisync/data.json");
+  const dataPath = path.resolve(VAULT_PATH, ".obsidian/plugins/multisync/data.json");
   return JSON.parse(fs.readFileSync(dataPath, "utf-8"));
 }
 

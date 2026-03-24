@@ -8,7 +8,7 @@ import http from "http";
 import { WebSocket } from "undici";
 
 const CDP_PORT = 9222;
-const PLUGIN = 'app.plugins.plugins["obsidian-multisync"]';
+const PLUGIN = 'app.plugins.plugins["multisync"]';
 let ws, msgId = 0;
 const pending = new Map();
 

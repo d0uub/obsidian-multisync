@@ -42,7 +42,7 @@ More providers coming soon.
 ### Manual Installation
 
 1. Download `main.js`, `manifest.json`, and `styles.css` from the [latest release](https://github.com/d0uub/obsidian-multisync/releases)
-2. Copy them to `<vault>/.obsidian/plugins/obsidian-multisync/`
+2. Copy them to `<vault>/.obsidian/plugins/multisync/`
 3. Restart Obsidian and enable the plugin
 
 ---
