@@ -391,7 +391,12 @@ export class OneDriveProvider implements ICloudProvider {
 
   async deleteFile(cloudFolder: string, relativePath: string): Promise<void> {
     const fullPath = joinCloudPath(cloudFolder, relativePath);
-    await this.graphDelete(`/me/drive/root:${this.encodeGraphPath(this.ensureLeadingSlash(fullPath))}:`);
+    try {
+      await this.graphDelete(`/me/drive/root:${this.encodeGraphPath(this.ensureLeadingSlash(fullPath))}:`);
+    } catch (e: any) {
+      if (e?.status === 404) return; // Already gone
+      throw e;
+    }
   }
 
   async mkdir(cloudFolder: string, relativePath: string): Promise<void> {

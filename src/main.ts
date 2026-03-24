@@ -281,7 +281,7 @@ export default class MultiSyncPlugin extends Plugin {
    * Computes cloud-only files per local folder (files on cloud but not in vault).
    */
   async refreshGhostFiles() {
-    const newMap = new Map<string, { name: string; size: number; providerType: CloudProviderType }[]>();
+    const newMap = new Map<string, { name: string; size: number; providerType: CloudProviderType; reason?: string }[]>();
 
     for (const rule of this.settings.rules) {
       const account = this.settings.accounts.find(a => a.id === rule.accountId);

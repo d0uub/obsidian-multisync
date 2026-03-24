@@ -415,7 +415,8 @@ export class GDriveProvider implements ICloudProvider {
   }
 
   async deleteFile(cloudFolder: string, relativePath: string): Promise<void> {
-    const fileId = await this.resolveFileId(cloudFolder, relativePath);
+    const fileId = await this.resolveFileIdSafe(cloudFolder, relativePath);
+    if (!fileId) return; // Already gone
     await this.ensureToken();
     // Move to trash instead of permanent delete
     await requestUrl({
