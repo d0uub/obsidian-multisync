@@ -275,6 +275,8 @@ export class OneDriveProvider implements ICloudProvider {
       for (const item of data.value || []) {
         // Skip root item itself (has no parentReference path matching our prefix)
         if (item.root) continue;
+        // Skip items with no parent (drive root returned without root flag)
+        if (!item.parentReference?.path) continue;
         // Skip deleted items
         if (item.deleted) continue;
 
@@ -552,6 +554,7 @@ export class OneDriveProvider implements ICloudProvider {
         const data = await this.graphGetRaw(url);
         for (const item of data.value || []) {
           if (item.root) continue; // skip drive root itself
+          if (!item.parentReference?.path) continue; // skip items with no parent (root without root flag)
 
           // Reconstruct full path from parentReference
           let itemPath: string | undefined;

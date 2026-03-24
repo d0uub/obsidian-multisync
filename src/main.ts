@@ -203,13 +203,14 @@ export default class MultiSyncPlugin extends Plugin {
 
   /** Build folder→provider map from rules and tag file explorer DOM */
   setupFileTreeIcons() {
-    // Collect local folder → provider type
-    const folderProviders = new Map<string, CloudProviderType>();
+    // Collect local folder → provider types (multiple providers possible per folder)
+    const folderProviders = new Map<string, Set<CloudProviderType>>();
     for (const rule of this.settings.rules) {
       const account = this.settings.accounts.find(a => a.id === rule.accountId);
       if (!account) continue;
       const folder = rule.localFolder || "/";
-      folderProviders.set(folder, account.type);
+      if (!folderProviders.has(folder)) folderProviders.set(folder, new Set());
+      folderProviders.get(folder)!.add(account.type);
     }
 
     // Remove old style sheet if any
@@ -241,42 +242,36 @@ export default class MultiSyncPlugin extends Plugin {
   }
 
   /** Tag file explorer folder DOM elements with provider icons */
-  private tagFileTreeFolders(folderProviders: Map<string, CloudProviderType>) {
+  private tagFileTreeFolders(folderProviders: Map<string, Set<CloudProviderType>>) {
     const allFolderTitles = document.querySelectorAll(".nav-folder-title");
     for (let i = 0; i < allFolderTitles.length; i++) {
       const el = allFolderTitles[i] as HTMLElement;
       const path = el.getAttribute("data-path");
       if (!path) continue;
-      const providerType = folderProviders.get(path);
-      const existing = el.querySelector(".multisync-provider-icon") as HTMLElement | null;
-      if (providerType) {
-        const svg = PROVIDERS[providerType as keyof typeof PROVIDERS]?.svgIcon;
-        if (!svg) continue;
-        if (existing) {
-          // Already has icon — check if correct type
-          if (existing.getAttribute("data-provider") === providerType) continue;
-          existing.remove();
-        }
-        const iconSpan = document.createElement("span");
-        iconSpan.className = "multisync-provider-icon";
-        iconSpan.setAttribute("data-provider", providerType);
-        iconSpan.innerHTML = svg;
-        iconSpan.style.cssText = "display:inline-flex;align-items:center;margin-right:4px;opacity:0.7;flex-shrink:0;width:14px;height:14px;position:relative;top:1px;";
-        // Scale SVG inside
-        const svgEl = iconSpan.querySelector("svg");
-        if (svgEl) {
-          svgEl.style.width = "14px";
-          svgEl.style.height = "14px";
-        }
-        // Insert before the folder name text element
+      const providerTypes = folderProviders.get(path);
+      // Remove all old icons
+      el.querySelectorAll(".multisync-provider-icon").forEach(e => e.remove());
+      if (providerTypes && providerTypes.size > 0) {
         const innerTitle = el.querySelector(".nav-folder-title-content");
-        if (innerTitle) {
-          el.insertBefore(iconSpan, innerTitle);
-        } else {
-          el.prepend(iconSpan);
+        for (const providerType of providerTypes) {
+          const svg = PROVIDERS[providerType as keyof typeof PROVIDERS]?.svgIcon;
+          if (!svg) continue;
+          const iconSpan = document.createElement("span");
+          iconSpan.className = "multisync-provider-icon";
+          iconSpan.setAttribute("data-provider", providerType);
+          iconSpan.innerHTML = svg;
+          iconSpan.style.cssText = "display:inline-flex;align-items:center;margin-right:4px;opacity:0.7;flex-shrink:0;width:14px;height:14px;position:relative;top:1px;";
+          const svgEl = iconSpan.querySelector("svg");
+          if (svgEl) {
+            svgEl.style.width = "14px";
+            svgEl.style.height = "14px";
+          }
+          if (innerTitle) {
+            el.insertBefore(iconSpan, innerTitle);
+          } else {
+            el.prepend(iconSpan);
+          }
         }
-      } else if (existing) {
-        existing.remove();
       }
     }
   }

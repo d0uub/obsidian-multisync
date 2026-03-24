@@ -190,6 +190,18 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
           .onClick(async () => {
             await this.plugin.runSync(true);
           })
+      )
+      .addButton((btn) =>
+        btn
+          .setButtonText("🗑 Clear Cache")
+          .onClick(async () => {
+            for (const a of this.plugin.settings.accounts) {
+              a.deltaTokens = undefined;
+              await deleteCloudRegistry(a.id);
+            }
+            await this.plugin.saveSettings();
+            new Notice("Cache cleared — next sync will do a full scan.");
+          })
       );
 
   }
