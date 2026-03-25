@@ -1,4 +1,4 @@
-import { Notice, Plugin } from "obsidian";
+import { Modal, Notice, Plugin } from "obsidian";
 import type { MultiSyncSettings, CloudAccount, CloudProviderType } from "./types";
 import { DEFAULT_SETTINGS } from "./types";
 import type { ICloudProvider } from "./providers/ICloudProvider";
@@ -6,6 +6,7 @@ import { PROVIDERS, PROVIDER_LIST } from "./providers/registry";
 import { runPipeline, SyncSummaryModal } from "./sync/pipeline";
 import { MultiSyncSettingsTab } from "./settings";
 import { loadCloudRegistry, loadUnsyncableFiles, type CloudFileEntry } from "./utils/cloudRegistry";
+import { setSvgContent } from "./utils/helpers";
 
 /** Transient OAuth state shared between settings tab and URI callbacks */
 export interface OAuth2Info {
@@ -32,7 +33,7 @@ export default class MultiSyncPlugin extends Plugin {
     this.initProviders();
 
     // Ribbon icon for manual sync
-    this.ribbonIconEl = this.addRibbonIcon("refresh-cw", "Multi Cloud Sync", async () => {
+    this.ribbonIconEl = this.addRibbonIcon("refresh-cw", "Multi cloud sync", async () => {
       await this.runSync();
     });
 
@@ -119,7 +120,7 @@ export default class MultiSyncPlugin extends Plugin {
     // Setup file tree provider icons after layout is ready
     this.app.workspace.onLayoutReady(() => {
       this.setupFileTreeIcons();
-      this.refreshGhostFiles();
+      void this.refreshGhostFiles();
     });
   }
 
@@ -139,7 +140,9 @@ export default class MultiSyncPlugin extends Plugin {
       await this.loadData()
     );
     // Migrate: move legacy deltaTokens map into account objects
+    // eslint-disable-next-line @typescript-eslint/no-deprecated -- intentional migration of old settings format
     if (this.settings.deltaTokens) {
+      // eslint-disable-next-line @typescript-eslint/no-deprecated
       for (const [id, token] of Object.entries(this.settings.deltaTokens)) {
         const acct = this.settings.accounts.find(a => a.id === id);
         if (acct) {
@@ -147,15 +150,17 @@ export default class MultiSyncPlugin extends Plugin {
           if (!acct.deltaTokens["me"]) acct.deltaTokens["me"] = token;
         }
       }
+      // eslint-disable-next-line @typescript-eslint/no-deprecated
       delete this.settings.deltaTokens;
       await this.saveData(this.settings);
     }
     // Migrate: single deltaToken → deltaTokens map
     for (const acct of this.settings.accounts) {
-      if ((acct as any).deltaToken) {
+      const legacy = acct as unknown as Record<string, unknown>;
+      if (legacy.deltaToken) {
         if (!acct.deltaTokens) acct.deltaTokens = {};
-        if (!acct.deltaTokens["me"]) acct.deltaTokens["me"] = (acct as any).deltaToken;
-        delete (acct as any).deltaToken;
+        if (!acct.deltaTokens["me"]) acct.deltaTokens["me"] = legacy.deltaToken as string;
+        delete legacy.deltaToken;
         await this.saveData(this.settings);
       }
     }
@@ -195,7 +200,7 @@ export default class MultiSyncPlugin extends Plugin {
       account.credentials.accessToken = token;
       account.credentials.refreshToken = refresh;
       account.credentials.tokenExpiry = String(expiry);
-      this.saveSettings();
+      void this.saveSettings();
     };
 
     return meta.createInstance(creds, onRefresh);
@@ -254,18 +259,12 @@ export default class MultiSyncPlugin extends Plugin {
       if (providerTypes && providerTypes.size > 0) {
         const innerTitle = el.querySelector(".nav-folder-title-content");
         for (const providerType of providerTypes) {
-          const svg = PROVIDERS[providerType as keyof typeof PROVIDERS]?.svgIcon;
+          const svg = PROVIDERS[providerType]?.svgIcon;
           if (!svg) continue;
           const iconSpan = document.createElement("span");
           iconSpan.className = "multisync-provider-icon";
           iconSpan.setAttribute("data-provider", providerType);
-          iconSpan.innerHTML = svg;
-          iconSpan.style.cssText = "display:inline-flex;align-items:center;margin-right:4px;opacity:0.7;flex-shrink:0;width:14px;height:14px;position:relative;top:1px;";
-          const svgEl = iconSpan.querySelector("svg");
-          if (svgEl) {
-            svgEl.style.width = "14px";
-            svgEl.style.height = "14px";
-          }
+          setSvgContent(iconSpan, svg);
           if (innerTitle) {
             el.insertBefore(iconSpan, innerTitle);
           } else {
@@ -393,7 +392,7 @@ export default class MultiSyncPlugin extends Plugin {
       if (folderEl.classList.contains("is-collapsed")) continue;
 
       // Get indentation from sibling
-      const siblingTitle = childrenEl.querySelector(":scope > .nav-file > .nav-file-title") as HTMLElement | null;
+      const siblingTitle = childrenEl.querySelector<HTMLElement>(":scope > .nav-file > .nav-file-title");
       const marginStyle = siblingTitle?.style.cssText
         .split(";")
         .filter(s => s.includes("margin-inline-start") || s.includes("padding-inline-start"))
@@ -413,9 +412,9 @@ export default class MultiSyncPlugin extends Plugin {
         navFile.setAttribute("data-ghost-path", fullPath);
 
         const navTitle = document.createElement("div");
-        navTitle.className = "tree-item-self nav-file-title";
+        navTitle.className = "tree-item-self nav-file-title multisync-ghost-nav";
         navTitle.setAttribute("data-path", fullPath);
-        navTitle.style.cssText = `opacity:0.45;cursor:default;${marginStyle ? marginStyle + ";" : ""}`;
+        if (marginStyle) navTitle.style.cssText = marginStyle;
 
         const nameEl = document.createElement("div");
         nameEl.className = "tree-item-inner nav-file-title-content";
@@ -438,8 +437,8 @@ export default class MultiSyncPlugin extends Plugin {
         const moreEl = document.createElement("div");
         moreEl.className = "tree-item nav-file multisync-ghost-file";
         const moreTitle = document.createElement("div");
-        moreTitle.className = "tree-item-self nav-file-title";
-        moreTitle.style.cssText = `opacity:0.45;cursor:pointer;font-style:italic;${marginStyle ? marginStyle + ";" : ""}`;
+        moreTitle.className = "tree-item-self nav-file-title multisync-ghost-nav-more";
+        if (marginStyle) moreTitle.style.cssText = marginStyle;
         const moreName = document.createElement("div");
         moreName.className = "tree-item-inner nav-file-title-content";
         moreName.textContent = `… and ${moreCount} more cloud-only files`;
@@ -459,30 +458,26 @@ export default class MultiSyncPlugin extends Plugin {
     folderPath: string,
     ghosts: { name: string; size: number; providerType: CloudProviderType; reason?: string }[]
   ) {
-    const { Modal } = require("obsidian");
     const modal = new Modal(this.app);
     modal.titleEl.textContent = `Cloud-only files in ${folderPath}`;
     const table = modal.contentEl.createEl("table", { cls: "multisync-ghost-table" });
-    table.style.cssText = "width:100%;border-collapse:collapse;font-size:0.9em;";
     const thead = table.createEl("thead");
     const hrow = thead.createEl("tr");
     for (const h of ["File", "Description"]) {
       const th = hrow.createEl("th");
       th.textContent = h;
-      th.style.cssText = "text-align:left;padding:4px 8px;border-bottom:1px solid var(--background-modifier-border);";
     }
     const tbody = table.createEl("tbody");
     for (const g of ghosts) {
       const row = tbody.createEl("tr");
       const tdName = row.createEl("td");
       tdName.textContent = g.name;
-      tdName.style.cssText = "padding:4px 8px;border-bottom:1px solid var(--background-modifier-border-hover);";
       const tdDesc = row.createEl("td");
       const sizeMB = g.size / 1e6;
       const sizeLabel = g.size === 0 ? "" : (sizeMB >= 1 ? `${sizeMB.toFixed(1)} MB` : `${(g.size / 1e3).toFixed(0)} KB`);
       const reason = g.reason || "Cloud-only";
       tdDesc.textContent = sizeLabel ? `${reason} (${sizeLabel})` : reason;
-      tdDesc.style.cssText = "padding:4px 8px;border-bottom:1px solid var(--background-modifier-border-hover);color:var(--text-muted);";
+      tdDesc.addClass("is-muted");
     }
     modal.open();
   }
@@ -490,7 +485,8 @@ export default class MultiSyncPlugin extends Plugin {
   /** Run the sync pipeline */
   async runSync(dryRun = false) {
     if (this.syncing) {
-      new Notice("MultiSync: Sync already in progress.");
+      // eslint-disable-next-line obsidianmd/ui/sentence-case -- MultiSync is the plugin name
+      new Notice("MultiSync: sync already in progress.");
       return;
     }
 
@@ -510,14 +506,15 @@ export default class MultiSyncPlugin extends Plugin {
     }
 
     if (pipeline.length === 0) {
-      new Notice("MultiSync: No rules or pipeline steps configured. Go to Settings.");
+      // eslint-disable-next-line obsidianmd/ui/sentence-case -- MultiSync is the plugin name
+      new Notice("MultiSync: no rules or pipeline steps configured. Go to settings.");
       return;
     }
 
     // Start animation
     this.syncing = true;
     this.ribbonIconEl?.addClass("multisync-spin");
-    this.statusBarEl?.setText("⟳ Syncing…");
+    this.statusBarEl?.setText("⟳ syncing…");
 
     new Notice(dryRun ? "MultiSync: Dry run starting..." : "MultiSync: Starting sync...");
     const startTime = Date.now();
@@ -579,19 +576,19 @@ export default class MultiSyncPlugin extends Plugin {
         new Notice(
           `MultiSync: ${mode}Done in ${elapsed}s. ${result.actionsExecuted} action(s) ${dryRun ? "detected" : "synced"}.`
         );
-        this.statusBarEl?.setText(`✓ Synced`);
+        this.statusBarEl?.setText(`✓ synced`);
       }
       // Clear status bar after 10s
       setTimeout(() => this.statusBarEl?.setText(""), 10000);
     } catch (e: any) {
       new Notice(`MultiSync: Sync failed! ${e?.message || e}`);
       console.error("MultiSync:", e);
-      this.statusBarEl?.setText("✗ Sync failed");
+      this.statusBarEl?.setText("✗ sync failed");
       setTimeout(() => this.statusBarEl?.setText(""), 10000);
     } finally {
       this.syncing = false;
       this.ribbonIconEl?.removeClass("multisync-spin");
-      this.refreshGhostFiles();
+      void this.refreshGhostFiles();
     }
   }
 }

@@ -3,7 +3,6 @@ import {
   App,
   Modal,
   Notice,
-  Platform,
   PluginSettingTab,
   Setting,
   setIcon,
@@ -19,6 +18,7 @@ import type {
 import { PROVIDERS, PROVIDER_LIST, needsManualPaste } from "./providers/registry";
 import { FolderSuggest } from "./ui/FolderSuggest";
 import { deleteCloudRegistry } from "./utils/cloudRegistry";
+import { setSvgContent } from "./utils/helpers";
 
 const ALL_OPS: { value: SyncOpType; label: string }[] = [
   { value: "local-update", label: "Local → Cloud (update)" },
@@ -64,7 +64,7 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
 
   private createRemoveIcon(parent: HTMLElement, onClick: () => Promise<void>): HTMLSpanElement {
     const span = parent.createSpan({ cls: "mobile-option-setting-item-remove-icon" });
-    span.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="svg-icon lucide-minus-circle"><circle cx="12" cy="12" r="10"></circle><line x1="8" y1="12" x2="16" y2="12"></line></svg>`;
+    setIcon(span, "minus-circle");
     span.addEventListener("click", (e) => { e.stopPropagation(); onClick(); });
     return span;
   }
@@ -72,7 +72,7 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
   private createDragIcon(parent: HTMLElement): HTMLSpanElement {
     const span = parent.createSpan({ cls: "mobile-option-setting-item-drag-icon" });
     span.setAttribute("draggable", "true");
-    span.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="svg-icon lucide-grip-vertical"><circle cx="9" cy="12" r="1"></circle><circle cx="9" cy="5" r="1"></circle><circle cx="9" cy="19" r="1"></circle><circle cx="15" cy="12" r="1"></circle><circle cx="15" cy="5" r="1"></circle><circle cx="15" cy="19" r="1"></circle></svg>`;
+    setIcon(span, "grip-vertical");
     return span;
   }
 
@@ -88,25 +88,9 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
-    // Inject drag-and-drop styles once
-    if (!containerEl.querySelector("style.multisync-dnd-styles")) {
-      const style = containerEl.createEl("style");
-      style.className = "multisync-dnd-styles";
-      style.textContent = `
-        .mobile-option-setting-item.is-dragging { opacity: 0.4; }
-        .mobile-option-setting-item.drag-over { border-top: 2px solid var(--interactive-accent); }
-        .mobile-option-setting-item-drag-icon { cursor: grab; }
-        .mobile-option-setting-item-drag-icon:active { cursor: grabbing; }
-        .mobile-option-setting-item-remove-icon { cursor: pointer; }
-        .mobile-option-setting-item-name { flex: 1; }
-        .multisync-step-edit, .multisync-rule-edit { padding: 0 0 8px 40px; }
-        .setting-group { margin-bottom: 1em; }
-      `;
-    }
-
     // ─── Cloud Accounts ───
     const accountGroup = containerEl.createDiv({ cls: "setting-group" });
-    new Setting(accountGroup).setName("Cloud Accounts").setHeading();
+    new Setting(accountGroup).setName("Cloud accounts").setHeading();
     const accountItems = accountGroup.createDiv({ cls: "setting-items" });
     for (const account of this.plugin.settings.accounts) {
       this.renderAccount(accountItems, account);
@@ -115,7 +99,7 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
 
     // ─── Sync Rules ───
     const rulesGroup = containerEl.createDiv({ cls: "setting-group" });
-    new Setting(rulesGroup).setName("Cloud Drive Mapping")
+    new Setting(rulesGroup).setName("Cloud drive mapping")
       .setDesc("Drag to re-order drive mapping sequence. Advanced mode able to fully customize drive and action order.")
       .setHeading();
     const rulesListEl = rulesGroup.createDiv({ cls: "setting-items" });
@@ -126,7 +110,7 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
 
     // ─── Sync Mode ───
     const syncGroup = containerEl.createDiv({ cls: "setting-group" });
-    new Setting(syncGroup).setName("Sync Options").setHeading();
+    new Setting(syncGroup).setName("Sync").setHeading();
 
     const syncItems = syncGroup.createDiv({ cls: "setting-items multisync-pipeline-list" });
 
@@ -174,11 +158,11 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
     // ─── Manual Sync ───
     new Setting(containerEl).setName("Actions").setHeading();
     new Setting(containerEl)
-      .setName("Run Sync Now")
+      .setName("Run sync now")
       .setDesc("Execute the pipeline defined above.")
       .addButton((btn) =>
         btn
-          .setButtonText("▶ Sync")
+          .setButtonText("Sync")
           .setCta()
           .onClick(async () => {
             await this.plugin.runSync();
@@ -186,14 +170,14 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
       )
       .addButton((btn) =>
         btn
-          .setButtonText("👁 Dry Run")
+          .setButtonText("Dry run")
           .onClick(async () => {
             await this.plugin.runSync(true);
           })
       )
       .addButton((btn) =>
         btn
-          .setButtonText("🗑 Clear Cache")
+          .setButtonText("Clear cache")
           .onClick(async () => {
             for (const a of this.plugin.settings.accounts) {
               a.deltaTokens = undefined;
@@ -212,7 +196,6 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
 
   private renderAccount(containerEl: HTMLElement, account: CloudAccount) {
     const isAuthed = !!(account.credentials.accessToken && account.credentials.refreshToken);
-    const typeLabel = PROVIDERS[account.type]?.label || account.type;
 
     const row = containerEl.createDiv({ cls: "mobile-option-setting-item" });
 
@@ -235,12 +218,11 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
 
     // ── Vendor icon ──
     const vendorIcon = row.createSpan({ cls: "mobile-option-setting-item-option-icon" });
-    vendorIcon.innerHTML = PROVIDERS[account.type]?.svgIcon || '';
+    setSvgContent(vendorIcon, PROVIDERS[account.type]?.svgIcon || '');
 
     // ── Inline-editable name ──
-    const nameSpan = row.createSpan({ cls: "mobile-option-setting-item-name" });
+    const nameSpan = row.createSpan({ cls: "mobile-option-setting-item-name multisync-account-name" });
     nameSpan.textContent = account.name;
-    nameSpan.style.cursor = "pointer";
     nameSpan.title = "Click to rename";
 
     let accountEditing = false;
@@ -248,15 +230,15 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
     nameSpan.addEventListener("click", () => {
       if (accountEditing) return;
       accountEditing = true;
-      nameSpan.style.display = "none";
+      nameSpan.addClass("is-hidden");
 
       const inputWrapper = row.insertBefore(document.createElement("span"), nameSpan.nextSibling);
       inputWrapper.className = "mobile-option-setting-item-name";
       const textInput = document.createElement("input");
       textInput.type = "text";
-      textInput.placeholder = "Account Name";
+      textInput.placeholder = "Account name";
       textInput.value = account.name;
-      textInput.style.cssText = "width:100%;font-size:inherit;";
+      textInput.addClass("multisync-account-input");
       inputWrapper.appendChild(textInput);
       textInput.focus();
       textInput.select();
@@ -272,7 +254,7 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
         }
         nameSpan.textContent = account.name;
         inputWrapper.remove();
-        nameSpan.style.display = "";
+        nameSpan.removeClass("is-hidden");
       };
 
       textInput.addEventListener("blur", finish);
@@ -325,7 +307,7 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
       if (provider) {
         const barWrap = document.createElement("div");
         barWrap.className = "multisync-quota-bar";
-        barWrap.style.cssText = "padding:2px 0 6px 40px;";
+
         row.insertAdjacentElement("afterend", barWrap);
 
         const renderBar = (q: { used: number; total: number } | null) => {
@@ -334,13 +316,13 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
           const usedGB = (q.used / 1e9).toFixed(1);
           const totalGB = (q.total / 1e9).toFixed(1);
           const color = pct > 90 ? "var(--text-error)" : pct > 70 ? "var(--text-warning)" : "var(--interactive-accent)";
-          barWrap.innerHTML = `
-            <div style="display:flex;align-items:center;gap:8px;font-size:11px;color:var(--text-muted);">
-              <div style="flex:1;height:6px;border-radius:3px;background:var(--background-modifier-border);overflow:hidden;">
-                <div style="width:${pct}%;height:100%;border-radius:3px;background:${color};transition:width 0.3s;"></div>
-              </div>
-              <span>${usedGB} / ${totalGB} GB (${pct}%)</span>
-            </div>`;
+          barWrap.empty();
+          const inner = barWrap.createDiv({ cls: "multisync-quota-bar-inner" });
+          const track = inner.createDiv({ cls: "multisync-quota-track" });
+          const fill = track.createDiv({ cls: "multisync-quota-fill" });
+          fill.style.setProperty("--ms-quota-pct", `${pct}%`);
+          fill.style.setProperty("--ms-quota-color", color);
+          inner.createSpan({ text: `${usedGB} / ${totalGB} GB (${pct}%)` });
         };
 
         // Use cached quota if available; only fetch once per settings open
@@ -373,33 +355,30 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
       const note = new Setting(containerEl)
         .setName("Account limit reached")
         .setDesc(`Free version supports up to ${MAX_ACCOUNTS} cloud accounts.`);
-      note.settingEl.style.opacity = "0.6";
+      note.settingEl.addClass("multisync-limit-note");
       return;
     }
 
     let newType: CloudProviderType = "dropbox";
 
     const s = new Setting(containerEl).setName("");
-    s.controlEl.style.justifyContent = "space-between";
-    s.controlEl.style.width = "100%";
+    s.controlEl.addClass("multisync-add-row-controls");
 
     // Icon-based provider selector
     const selectorRow = s.controlEl.createDiv({ cls: "multisync-provider-selector" });
-    selectorRow.style.cssText = "display:inline-flex;gap:6px;align-items:center;margin-right:8px;";
     const iconButtons: HTMLElement[] = [];
     for (const meta of PROVIDER_LIST) {
-      const btn = selectorRow.createDiv({ cls: "multisync-provider-icon", attr: { "aria-label": meta.label } });
-      btn.style.cssText = "cursor:pointer;padding:4px 8px;border-radius:6px;display:inline-flex;align-items:center;transition:background 0.15s;";
-      btn.innerHTML = meta.svgIcon;
+      const btn = selectorRow.createDiv({ cls: "multisync-provider-icon-btn", attr: { "aria-label": meta.label } });
+      setSvgContent(btn, meta.svgIcon);
       // Scale icon
       const svg = btn.querySelector("svg");
       if (svg) { svg.setAttribute("width", "20"); svg.setAttribute("height", "20"); }
-      if (meta.type === newType) btn.style.background = "var(--interactive-accent)";
+      if (meta.type === newType) btn.addClass("is-selected");
       btn.title = meta.label;
       btn.addEventListener("click", () => {
-        newType = meta.type as CloudProviderType;
-        for (const b of iconButtons) b.style.background = "";
-        btn.style.background = "var(--interactive-accent)";
+        newType = meta.type;
+        for (const b of iconButtons) b.removeClass("is-selected");
+        btn.addClass("is-selected");
       });
       iconButtons.push(btn);
     }
@@ -466,7 +445,7 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
   /*  Rules                                                              */
   /* ------------------------------------------------------------------ */
 
-  private async renderRule(containerEl: HTMLElement, rule: SyncRule, index: number) {
+  private renderRule(containerEl: HTMLElement, rule: SyncRule, index: number) {
     const account = this.plugin.settings.accounts.find(
       (a) => a.id === rule.accountId
     );
@@ -488,7 +467,7 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
     // Vendor icon at far left of row
     if (account) {
       const vendorIcon = row.createSpan({ cls: "mobile-option-setting-item-option-icon" });
-      vendorIcon.innerHTML = PROVIDERS[account.type]?.svgIcon || '';
+      setSvgContent(vendorIcon, PROVIDERS[account.type]?.svgIcon || '');
       // Move icon to be the first child after remove icon
       if (row.childNodes.length > 1 && row.childNodes[1] !== vendorIcon) {
         row.insertBefore(vendorIcon, row.childNodes[1]);
@@ -501,9 +480,7 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
     // Folder icon before local folder
     const folderIcon = nameSpan.createSpan();
     setIcon(folderIcon, "folder");
-    folderIcon.style.display = "inline-flex";
-    folderIcon.style.verticalAlign = "middle";
-    folderIcon.style.marginRight = "2px";
+    folderIcon.addClass("multisync-folder-icon");
     nameSpan.createEl("span", { text: rule.localFolder || "(entire vault)" });
 
     // ── Drag handle (hidden in advanced mode — pipeline controls ordering) ──
@@ -550,7 +527,7 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
       const note = new Setting(containerEl)
         .setName("Rule limit reached")
         .setDesc(`Free version supports up to ${MAX_RULES} sync rules.`);
-      note.settingEl.style.opacity = "0.6";
+      note.settingEl.addClass("multisync-limit-note");
       return;
     }
 
@@ -559,18 +536,15 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
     let newLocalFolder = "";
 
     const s = new Setting(containerEl).setName("");
-    s.controlEl.style.justifyContent = "space-between";
-    s.controlEl.style.width = "100%";
+    s.controlEl.addClass("multisync-add-row-controls");
 
     // Left group for inputs
-    const leftGroup = s.controlEl.createDiv();
-    leftGroup.style.cssText = "display:flex;align-items:center;gap:6px;flex-wrap:wrap;";
+    const leftGroup = s.controlEl.createDiv({ cls: "multisync-add-rule-left" });
 
     const firstAccount = this.plugin.settings.accounts[0];
     const ruleIconSpan = document.createElement("span");
     ruleIconSpan.className = "multisync-inline-icon";
-    ruleIconSpan.style.cssText = "display:inline-flex;vertical-align:middle;margin-right:4px;";
-    if (firstAccount) ruleIconSpan.innerHTML = PROVIDERS[firstAccount.type]?.svgIcon || '';
+    if (firstAccount) setSvgContent(ruleIconSpan, PROVIDERS[firstAccount.type]?.svgIcon || '');
 
     s.addDropdown((dd) => {
       dd.selectEl.parentElement?.insertBefore(ruleIconSpan, dd.selectEl);
@@ -581,7 +555,7 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
       dd.onChange((val) => {
         newAccountId = val;
         const acc = this.plugin.settings.accounts.find(a => a.id === val);
-        ruleIconSpan.innerHTML = acc ? PROVIDERS[acc.type]?.svgIcon || '' : '';
+        setSvgContent(ruleIconSpan, acc ? PROVIDERS[acc.type]?.svgIcon || '' : '');
       });
     });
 
@@ -641,7 +615,6 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
     const account = rule
       ? this.plugin.settings.accounts.find((a) => a.id === rule.accountId)
       : null;
-    const opLabel = ALL_OPS.find((o) => o.value === step.operation)?.label || step.operation;
 
     const row = pipelineContainer.createDiv({ cls: "mobile-option-setting-item" });
 
@@ -655,7 +628,7 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
     // ── Vendor icon ──
     if (account) {
       const vendorSpan = row.createSpan({ cls: "mobile-option-setting-item-option-icon" });
-      vendorSpan.innerHTML = PROVIDERS[account.type]?.svgIcon || '';
+      setSvgContent(vendorSpan, PROVIDERS[account.type]?.svgIcon || '');
     }
 
     // ── Inline dropdowns ──
@@ -663,7 +636,7 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
 
     // Rule selector
     const ruleSelect = nameSpan.createEl("select", { cls: "dropdown" });
-    ruleSelect.style.cssText = "border:none;background:transparent;font-size:inherit;color:inherit;padding:0;margin-right:4px;cursor:pointer;";
+    ruleSelect.addClass("multisync-pipeline-rule-select");
     for (const r of this.plugin.settings.rules) {
       const a = this.plugin.settings.accounts.find((acc) => acc.id === r.accountId);
       const opt = ruleSelect.createEl("option", {
@@ -682,7 +655,7 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
 
     // Operation selector
     const opSelect = nameSpan.createEl("select", { cls: "dropdown" });
-    opSelect.style.cssText = "border:none;background:transparent;font-size:inherit;color:inherit;padding:0;cursor:pointer;";
+    opSelect.addClass("multisync-pipeline-select");
     for (const op of ALL_OPS) {
       const opt = opSelect.createEl("option", { text: op.label, value: op.value });
       if (op.value === step.operation) opt.selected = true;
@@ -859,21 +832,20 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
     return new Promise<boolean>((resolve) => {
       const modal = new Modal(this.app);
       let resolved = false;
-      modal.titleEl.setText("Google Drive Sync (Experimental)");
+      modal.titleEl.setText("Google Drive sync (experimental)");
       modal.contentEl.createEl("p", {
         text: "Google Drive sync is experimental. Please note the following limitations:",
       });
       const list = modal.contentEl.createEl("ul");
       list.createEl("li", {
+        // eslint-disable-next-line obsidianmd/ui/sentence-case -- Docs, Sheets, Slides are product names
         text: "Google native files (Docs, Sheets, Slides, etc.) are not supported and will be skipped.",
       });
       list.createEl("li", {
         text: "Duplicate file or folder names in the same directory are not supported and may cause sync issues.",
       });
       const btnRow = modal.contentEl.createEl("div");
-      btnRow.style.display = "flex";
-      btnRow.style.justifyContent = "flex-end";
-      btnRow.style.marginTop = "16px";
+      btnRow.addClass("multisync-modal-btn-row");
       const okBtn = btnRow.createEl("button", { text: "OK", cls: "mod-cta" });
       okBtn.onclick = () => { resolved = true; modal.close(); };
       modal.onClose = () => { resolve(resolved); };
@@ -921,7 +893,7 @@ class AuthCodeModal extends Modal {
 
     let codeValue = "";
     new Setting(contentEl)
-      .setName("Authorization Code")
+      .setName("Authorization code")
       .addText((text) =>
         text.setPlaceholder("Paste code here").onChange((val) => {
           codeValue = val.trim();

@@ -28,3 +28,15 @@ export function fileName(p: string): string {
   const parts = normalizePath(p).split("/");
   return parts[parts.length - 1] || "";
 }
+
+/** Safely set SVG content via DOMParser instead of innerHTML */
+export function setSvgContent(el: HTMLElement, svgString: string): void {
+  el.empty();
+  if (!svgString) return;
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(svgString, "image/svg+xml");
+  const svg = doc.documentElement;
+  if (svg && svg.nodeName === "svg") {
+    el.appendChild(el.doc.importNode(svg, true));
+  }
+}

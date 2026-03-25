@@ -1,6 +1,6 @@
 import type { ICloudProvider } from "./ICloudProvider";
-import type { CloudProviderType, CloudAccount } from "../types";
-import { requestUrl, Platform } from "obsidian";
+import type { CloudProviderType } from "../types";
+import { Platform } from "obsidian";
 
 // ─── PKCE helpers (shared by all providers) ───
 
@@ -22,8 +22,7 @@ function base64UrlEncode(bytes: Uint8Array): string {
 export function needsManualPaste(): boolean {
   if (!Platform.isDesktopApp) return false;
   if (Platform.isMacOS) return false;
-  const ua = (navigator.userAgent || "").toLowerCase();
-  return /linux|ubuntu|debian|fedora|centos/.test(ua);
+  return Platform.isLinux;
 }
 
 // ─── Provider metadata interface ───

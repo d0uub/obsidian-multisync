@@ -1,4 +1,4 @@
-import { App, Modal, normalizePath as obsNormalizePath } from "obsidian";
+import { App, Modal } from "obsidian";
 import type {
   FileEntry,
   SyncAction,
@@ -19,6 +19,7 @@ import {
   buildIdToPathMap,
   type CloudFileEntry,
 } from "../utils/cloudRegistry";
+import { setSvgContent } from "../utils/helpers";
 
 const OP_LABELS: Record<string, string> = {
   "local-add": "Add",
@@ -294,7 +295,7 @@ export async function runPipeline(
   }
 
   // ── 4. Execution phase — run detected actions ──
-  for (const [si, { step, rule, account, provider, actions }] of stepActions.entries()) {
+  for (const [, { step, rule, account, provider, actions }] of stepActions.entries()) {
     try {
       // Sort: small files first (concurrent), large files last (serialized to avoid OOM)
       const LARGE_FILE_THRESHOLD = 50 * 1024 * 1024; // 50 MB
@@ -348,7 +349,6 @@ export async function runPipeline(
         try {
           const arrow = OP_ARROW[action.operation] || "";
           const opLabel = OP_LABELS[action.operation] || action.operation;
-          const providerLabel = { dropbox: "Dropbox", onedrive: "OneDrive", gdrive: "GDrive" }[account.type || ""] || "";
           ctx.onAction?.(action, step);
           const dest = OP_DEST[action.operation] || "";
           const toCloud = ["local-add", "local-update", "local-delete"].includes(action.operation);
@@ -466,19 +466,14 @@ export class SyncSummaryModal extends Modal {
     const { contentEl } = this;
     const s = this.summary;
 
-    contentEl.createEl("h3", { text: `Sync Summary — ${s.total} action(s)` });
+    contentEl.createEl("h3", { text: `Sync summary — ${s.total} action(s)` });
 
     // Counts row: ➕ Add  ↻ Update  🗑 Delete
-    const counts = contentEl.createEl("div");
-    counts.style.display = "flex";
-    counts.style.gap = "16px";
-    counts.style.fontSize = "1.1em";
-    counts.style.marginBottom = "12px";
+    const counts = contentEl.createEl("div", { cls: "multisync-summary-counts" });
     if (s.add > 0) counts.createEl("span", { text: `➕ Add: ${s.add}` });
     if (s.update > 0) counts.createEl("span", { text: `↻ Update: ${s.update}` });
     if (s.delete > 0) {
-      const del = counts.createEl("span", { text: `🗑 Delete: ${s.delete}` });
-      del.style.color = "var(--text-error)";
+      const del = counts.createEl("span", { text: `🗑 Delete: ${s.delete}`, cls: "multisync-summary-delete" });
     }
 
     // Per-operation expandable details: ↑ <icon> (driveName) Upload: ☁ N file(s)
@@ -489,26 +484,17 @@ export class SyncSummaryModal extends Modal {
       const arrow = OP_ARROW[d.operation] || "";
       const dest = OP_DEST[d.operation] || "";
 
-      const summaryEl = details.createEl("summary");
-      summaryEl.style.cssText = "display:flex;align-items:center;gap:4px;cursor:pointer;";
+      const summaryEl = details.createEl("summary", { cls: "multisync-summary-detail-header" });
       summaryEl.createSpan({ text: arrow });
       // Inline provider SVG icon
       const svgIcon = PROVIDERS[d.accountType as keyof typeof PROVIDERS]?.svgIcon;
       if (svgIcon) {
-        const iconSpan = summaryEl.createSpan();
-        iconSpan.innerHTML = svgIcon;
-        iconSpan.style.cssText = "display:inline-flex;align-items:center;width:16px;height:16px;";
+        const iconSpan = summaryEl.createSpan({ cls: "multisync-summary-icon" });
+        setSvgContent(iconSpan, svgIcon);
       }
       const toCloud = ["local-add", "local-update", "local-delete"].includes(d.operation);
       summaryEl.createSpan({ text: `(${d.accountName}) ${friendlyOp}: ${dest} ${d.count} file(s)` });
-      const list = details.createEl("div");
-      list.style.maxHeight = "150px";
-      list.style.overflow = "auto";
-      list.style.fontSize = "0.85em";
-      list.style.padding = "8px";
-      list.style.border = "1px solid var(--background-modifier-border)";
-      list.style.borderRadius = "4px";
-      list.style.marginTop = "4px";
+      const list = details.createEl("div", { cls: "multisync-summary-file-list" });
       const maxShow = 50;
       const shown = d.paths.slice(0, maxShow);
       // Show full path with folder prefix
@@ -518,24 +504,18 @@ export class SyncSummaryModal extends Modal {
         list.createEl("div", { text: fullPath });
       }
       if (d.paths.length > maxShow) {
-        const more = list.createEl("div", { text: `… and ${d.paths.length - maxShow} more` });
-        more.style.color = "var(--text-muted)";
-        more.style.fontStyle = "italic";
+        const more = list.createEl("div", { text: `… and ${d.paths.length - maxShow} more`, cls: "multisync-summary-more" });
       }
     }
 
     // Buttons
-    const btnRow = contentEl.createEl("div");
-    btnRow.style.display = "flex";
-    btnRow.style.justifyContent = "flex-end";
-    btnRow.style.gap = "8px";
-    btnRow.style.marginTop = "16px";
+    const btnRow = contentEl.createEl("div", { cls: "multisync-modal-btn-row-gap" });
 
     const cancelBtn = btnRow.createEl("button", { text: "Cancel" });
     cancelBtn.onclick = () => { this.confirmed = false; this.close(); };
 
     const cls = s.delete > 0 ? "mod-warning" : "mod-cta";
-    const confirmBtn = btnRow.createEl("button", { text: "Confirm Sync", cls });
+    const confirmBtn = btnRow.createEl("button", { text: "Confirm sync", cls });
     confirmBtn.onclick = () => { this.confirmed = true; this.close(); };
   }
 
@@ -669,9 +649,10 @@ async function executeAction(
     }
     case "local-delete": {
       // Local deleted → delete from cloud (soft-delete / trash)
+      const deleteCloudId = action.sourceEntry?.cloudId;
       if (action.isFolder) {
         // Delete folder from cloud directly (no backup for folders)
-        await provider.deleteFile(rule.cloudFolder, action.path.replace(/\/$/, ""));
+        await provider.deleteFile(rule.cloudFolder, action.path.replace(/\/$/, ""), deleteCloudId);
         break;
       }
 
@@ -686,7 +667,7 @@ async function executeAction(
             await ensureLocalParentDir(app, backupPath);
             await app.vault.adapter.writeBinary(backupPath, content);
             const abstractFile = app.vault.getAbstractFileByPath(backupPath);
-            if (abstractFile) await app.vault.trash(abstractFile, true);
+            if (abstractFile) await app.fileManager.trashFile(abstractFile);
           } catch (backupErr: any) {
             console.warn(`Skipping cloud delete for ${action.path}: backup failed — ${backupErr?.message || backupErr}`);
             break;
@@ -694,7 +675,7 @@ async function executeAction(
         }
       }
 
-      await provider.deleteFile(rule.cloudFolder, action.path.replace(/\/$/, ""));
+      await provider.deleteFile(rule.cloudFolder, action.path.replace(/\/$/, ""), deleteCloudId);
       break;
     }
     case "cloud-delete": {
@@ -704,7 +685,7 @@ async function executeAction(
       const abstractFile = ctx.app.vault.getAbstractFileByPath(cleanPath);
       if (abstractFile) {
         try {
-          await ctx.app.vault.trash(abstractFile, true);
+          await ctx.app.fileManager.trashFile(abstractFile);
         } catch (e: any) {
           if (e?.message?.includes("ENOENT")) break; // already gone
           throw e;
@@ -717,10 +698,10 @@ async function executeAction(
 }
 
 /** List local files under a vault folder, returning FileEntry[] with paths relative to that folder */
-export async function listLocalFiles(
+export function listLocalFiles(
   app: App,
   localFolder: string
-): Promise<FileEntry[]> {
+): FileEntry[] {
   const entries: FileEntry[] = [];
   const files = app.vault.getFiles();
   const normalized = normalizePath(localFolder);
@@ -907,7 +888,7 @@ async function cleanupEmptyFolders(app: App, localFolder: string): Promise<void>
     const listed = await app.vault.adapter.list(folder.path);
     if ((listed.files || []).length === 0 && (listed.folders || []).length === 0) {
       try {
-        await app.vault.trash(folder, true);
+        await app.fileManager.trashFile(folder);
       } catch { /* best effort */ }
     }
   }

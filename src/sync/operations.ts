@@ -150,9 +150,10 @@ export function detectLocalDeletes(
     const cloud = cloudMap.get(basePath);
     if (!cloud) continue; // already gone from cloud too (cloudMap keyed by lowercase)
     // Was synced before, now missing locally, still on cloud → local deletion
+    // Use cloud.path (original case) instead of basePath (lowercase) for correct GDrive file resolution
     actions.push({
       operation: "local-delete",
-      path: basePath,
+      path: cloud.path,
       isFolder: cloud.isFolder,
       sourceEntry: cloud,
     });

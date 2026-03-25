@@ -36,8 +36,7 @@ function base64UrlEncode(bytes: Uint8Array): string {
 export function needsManualPaste(): boolean {
   if (!Platform.isDesktopApp) return false;
   if (Platform.isMacOS) return false;
-  const ua = (navigator.userAgent || "").toLowerCase();
-  return /linux|ubuntu|debian|fedora|centos/.test(ua);
+  return Platform.isLinux;
 }
 
 // ═══════════════════════════════════════════════

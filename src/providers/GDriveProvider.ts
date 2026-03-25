@@ -2,7 +2,7 @@ import type { ICloudProvider, UnsyncableFile } from "./ICloudProvider";
 import type { FileEntry } from "../types";
 import type { ProviderMeta } from "./registry";
 import { requestUrl } from "obsidian";
-import { normalizePath, joinCloudPath } from "../utils/helpers";
+import { joinCloudPath } from "../utils/helpers";
 import { generatePKCE } from "./registry";
 
 const GDRIVE_SCOPES = "https://www.googleapis.com/auth/drive";
@@ -27,9 +27,17 @@ function sanitizeName(name: string): string {
     .replace(/\|/g, "｜");    // fullwidth vertical bar U+FF5C
 }
 
-/** Returns true if any segment of the path starts with '.' (hidden file/folder). */
-function isHiddenPath(name: string): boolean {
-  return name.split("/").some(s => s.startsWith("."));
+/** Reverse sanitizeName: convert Unicode alternatives back to original characters for GDrive API queries. */
+function unsanitizeName(name: string): string {
+  return name
+    .replace(/⁄/g, "/")
+    .replace(/꞉/g, ":")
+    .replace(/＊/g, "*")
+    .replace(/？/g, "?")
+    .replace(/＂/g, '"')
+    .replace(/＜/g, "<")
+    .replace(/＞/g, ">")
+    .replace(/｜/g, "|");
 }
 
 /** Google-native types (Docs/Sheets/etc.) cannot be downloaded as binary — skip them. */
@@ -414,8 +422,8 @@ export class GDriveProvider implements ICloudProvider {
     }
   }
 
-  async deleteFile(cloudFolder: string, relativePath: string): Promise<void> {
-    const fileId = await this.resolveFileIdSafe(cloudFolder, relativePath);
+  async deleteFile(cloudFolder: string, relativePath: string, cloudId?: string): Promise<void> {
+    const fileId = cloudId || await this.resolveFileIdSafe(cloudFolder, relativePath);
     if (!fileId) return; // Already gone
     await this.ensureToken();
     // Move to trash instead of permanent delete
@@ -715,8 +723,13 @@ export class GDriveProvider implements ICloudProvider {
   /** Resolve a file path to its GDrive file ID. Returns null if not found. */
   private async resolveFileIdSafe(cloudFolder: string, relativePath: string): Promise<string | null> {
     // Check cached ID from listFiles first (handles sanitized names, special chars)
+    // Case-insensitive lookup: syncBase paths are lowercase, but cache keys are original case
     const cached = this.fileIdCache.get(relativePath);
     if (cached) return cached;
+    const relLower = relativePath.toLowerCase();
+    for (const [k, v] of this.fileIdCache) {
+      if (k.toLowerCase() === relLower) return v;
+    }
 
     const parts = relativePath.split("/").filter(Boolean);
     const fileName = parts.pop()!;
@@ -731,11 +744,18 @@ export class GDriveProvider implements ICloudProvider {
       return null;
     }
 
-    const query = `name='${fileName.replace(/'/g, "\\'")}' and '${parentId}' in parents and trashed=false`;
-    const data = await this.gdriveGet(
-      `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id)&pageSize=1`
-    );
-    if (!data.files || data.files.length === 0) return null;
-    return data.files[0].id;
+    // Try original (sanitized) name first, then reverse-sanitize for GDrive original name
+    const namesToTry = [fileName];
+    const unsanitized = unsanitizeName(fileName);
+    if (unsanitized !== fileName) namesToTry.push(unsanitized);
+
+    for (const name of namesToTry) {
+      const query = `name='${name.replace(/'/g, "\\'")}' and '${parentId}' in parents and trashed=false`;
+      const data = await this.gdriveGet(
+        `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id)&pageSize=1`
+      );
+      if (data.files && data.files.length > 0) return data.files[0].id;
+    }
+    return null;
   }
 }

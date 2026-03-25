@@ -256,7 +256,7 @@ export class DropboxProvider implements ICloudProvider {
     );
   }
 
-  async deleteFile(cloudFolder: string, relativePath: string): Promise<void> {
+  async deleteFile(cloudFolder: string, relativePath: string, _cloudId?: string): Promise<void> {
     const fullPath = joinCloudPath(cloudFolder, relativePath);
     try {
       await this.apiRpc("/files/delete_v2", { path: fullPath });

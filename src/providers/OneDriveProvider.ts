@@ -3,7 +3,7 @@ import type { FileEntry } from "../types";
 import type { ProviderMeta } from "./registry";
 import type { CloudFileEntry } from "../utils/cloudRegistry";
 import { requestUrl } from "obsidian";
-import { normalizePath, joinCloudPath } from "../utils/helpers";
+import { joinCloudPath } from "../utils/helpers";
 import { generatePKCE } from "./registry";
 
 const CLIENT_ID = "03beb548-4548-4835-ba4e-18ac1f469442";
@@ -389,7 +389,7 @@ export class OneDriveProvider implements ICloudProvider {
     }
   }
 
-  async deleteFile(cloudFolder: string, relativePath: string): Promise<void> {
+  async deleteFile(cloudFolder: string, relativePath: string, _cloudId?: string): Promise<void> {
     const fullPath = joinCloudPath(cloudFolder, relativePath);
     try {
       await this.graphDelete(`/me/drive/root:${this.encodeGraphPath(this.ensureLeadingSlash(fullPath))}:`);

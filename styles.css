@@ -9,3 +9,208 @@
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 }
+
+/* DnD styles (moved from injected <style> tag) */
+.mobile-option-setting-item.is-dragging { opacity: 0.4; }
+.mobile-option-setting-item.drag-over { border-top: 2px solid var(--interactive-accent); }
+.mobile-option-setting-item-drag-icon { cursor: grab; }
+.mobile-option-setting-item-drag-icon:active { cursor: grabbing; }
+.mobile-option-setting-item-remove-icon { cursor: pointer; }
+.mobile-option-setting-item-name { flex: 1; }
+.multisync-step-edit,
+.multisync-rule-edit { padding: 0 0 8px 40px; }
+.setting-group { margin-bottom: 1em; }
+
+/* Account name (inline-editable) */
+.multisync-account-name { cursor: pointer; }
+.multisync-account-name.is-hidden { display: none; }
+.multisync-account-input { width: 100%; font-size: inherit; }
+
+/* Quota bar */
+.multisync-quota-bar { padding: 2px 0 6px 40px; }
+.multisync-quota-bar-inner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.multisync-quota-track {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--background-modifier-border);
+  overflow: hidden;
+}
+.multisync-quota-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s;
+  width: var(--ms-quota-pct);
+  background: var(--ms-quota-color);
+}
+
+/* Limit note (disabled appearance) */
+.multisync-limit-note { opacity: 0.6; }
+
+/* Add account/rule row controls */
+.multisync-add-row-controls {
+  justify-content: space-between;
+  width: 100%;
+}
+
+/* Provider icon selector */
+.multisync-provider-selector {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  margin-right: 8px;
+}
+.multisync-provider-icon-btn {
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  transition: background 0.15s;
+}
+.multisync-provider-icon-btn.is-selected {
+  background: var(--interactive-accent);
+}
+
+/* Folder icon in rule row */
+.multisync-folder-icon {
+  display: inline-flex;
+  vertical-align: middle;
+  margin-right: 2px;
+}
+
+/* Add rule left group */
+.multisync-add-rule-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* Inline icon */
+.multisync-inline-icon {
+  display: inline-flex;
+  vertical-align: middle;
+  margin-right: 4px;
+}
+
+/* Pipeline inline selects */
+.multisync-pipeline-select {
+  border: none;
+  background: transparent;
+  font-size: inherit;
+  color: inherit;
+  padding: 0;
+  cursor: pointer;
+}
+.multisync-pipeline-rule-select {
+  border: none;
+  background: transparent;
+  font-size: inherit;
+  color: inherit;
+  padding: 0;
+  margin-right: 4px;
+  cursor: pointer;
+}
+
+/* Modal button row */
+.multisync-modal-btn-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+.multisync-modal-btn-row-gap {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+/* SyncSummaryModal */
+.multisync-summary-counts {
+  display: flex;
+  gap: 16px;
+  font-size: 1.1em;
+  margin-bottom: 12px;
+}
+.multisync-summary-delete {
+  color: var(--text-error);
+}
+.multisync-summary-detail-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+.multisync-summary-icon {
+  display: inline-flex;
+  align-items: center;
+  width: 16px;
+  height: 16px;
+}
+.multisync-summary-file-list {
+  max-height: 150px;
+  overflow: auto;
+  font-size: 0.85em;
+  padding: 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  margin-top: 4px;
+}
+.multisync-summary-more {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* Ghost files table */
+.multisync-ghost-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9em;
+}
+.multisync-ghost-table th {
+  text-align: left;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+.multisync-ghost-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--background-modifier-border-hover);
+}
+.multisync-ghost-table .is-muted {
+  color: var(--text-muted);
+}
+
+/* File tree provider icon */
+.multisync-provider-icon {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 4px;
+  opacity: 0.7;
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  position: relative;
+  top: 1px;
+}
+.multisync-provider-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Ghost file nav entries */
+.multisync-ghost-nav {
+  opacity: 0.45;
+  cursor: default;
+}
+.multisync-ghost-nav-more {
+  opacity: 0.45;
+  cursor: pointer;
+  font-style: italic;
+}

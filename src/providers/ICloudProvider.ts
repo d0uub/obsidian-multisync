@@ -68,8 +68,9 @@ export interface ICloudProvider {
 
   /**
    * Delete a file or folder from cloud.
+   * @param cloudId - optional provider-specific ID to delete directly (bypasses path resolution)
    */
-  deleteFile(cloudFolder: string, relativePath: string): Promise<void>;
+  deleteFile(cloudFolder: string, relativePath: string, cloudId?: string): Promise<void>;
 
   /**
    * Create a folder on cloud.
