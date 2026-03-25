@@ -556,9 +556,9 @@ export class GDriveProvider implements ICloudProvider {
 
   /** Reverse-resolve a GDrive folder ID to its full path from root. */
   private async resolvePathFromId(fileId: string): Promise<string> {
-    // Check reverse cache
+    // Check reverse cache (cache keys may have leading '/' from joinCloudPath — strip it)
     for (const [path, id] of this.folderIdCache) {
-      if (id === fileId) return path;
+      if (id === fileId) return path.replace(/^\/+/, "");
     }
     if (fileId === "root") return "";
     const actualRoot = await this.getActualRootId();

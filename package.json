@@ -23,9 +23,5 @@
     "typescript": "^5.5.4",
     "undici": "^7.24.4",
     "vitest": "^4.1.0"
-  },
-  "dependencies": {
-    "@microsoft/microsoft-graph-client": "^3.0.7",
-    "dropbox": "^10.34.0"
   }
 }

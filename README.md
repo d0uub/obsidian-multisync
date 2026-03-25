@@ -23,7 +23,7 @@ This plugin allows you to map cloud drives to Obsidian, similar to other plugins
 ## Pro Features
 
 - Unlimited Cloud Drives
-- Real-time Sync
+- Real-time Sync (Upload only)
 - Smart Content Merge
 
 ## Supported Providers

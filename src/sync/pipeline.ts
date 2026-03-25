@@ -10,7 +10,7 @@ import type {
 import type { ICloudProvider, DeltaChange } from "../providers/ICloudProvider";
 import { PROVIDERS } from "../providers/registry";
 import { OPERATION_DETECTORS } from "./operations";
-import { normalizePath } from "../utils/helpers";
+import { normalizePath, normalizeRelativePath } from "../utils/helpers";
 import { computeLocalHash } from "../utils/hashing";
 import {
   saveCloudRegistry,
@@ -318,7 +318,7 @@ export async function runPipeline(
             ctx.onAction?.(action, step);
             const dest = OP_DEST[action.operation] || "";
             const toCloud = ["local-add", "local-update", "local-delete"].includes(action.operation);
-            const destPath = toCloud ? `${rule.cloudFolder}/${action.path}` : `${rule.localFolder}/${action.path}`;
+            const destPath = toCloud ? `${rule.cloudFolder}/${action.path}`.replace(/\/\/+/g, "/") : `${rule.localFolder}/${action.path}`;
             console.debug(`${arrow} ${account.name}${providerLabel ? ` (${providerLabel})` : ""} ${opLabel}: ${dest} ${destPath}`);
             if (!ctx.dryRun) {
               const executed = await executeAction(action, rule, provider, ctx);
@@ -352,7 +352,7 @@ export async function runPipeline(
           ctx.onAction?.(action, step);
           const dest = OP_DEST[action.operation] || "";
           const toCloud = ["local-add", "local-update", "local-delete"].includes(action.operation);
-          const destPath = toCloud ? `${rule.cloudFolder}/${action.path}` : `${rule.localFolder}/${action.path}`;
+          const destPath = toCloud ? `${rule.cloudFolder}/${action.path}`.replace(/\/\/+/g, "/") : `${rule.localFolder}/${action.path}`;
           const sizeMB = ((action.sourceEntry?.size || 0) / 1e6).toFixed(0);
           console.debug(`${arrow} ${account.name} ${opLabel}: ${dest} ${destPath} (${sizeMB} MB, sequential)`);
           if (!ctx.dryRun) {
@@ -796,7 +796,9 @@ function filterRegistryByFolder(registry: CloudFileEntry[], cloudFolder: string)
   // Collect entries with relative paths
   const raw: { rel: string; entry: CloudFileEntry }[] = [];
   for (const e of registry) {
-    const rel = stripPrefix(e.path, pfx);
+    let rel = stripPrefix(e.path, pfx);
+    if (!rel) continue;
+    rel = normalizeRelativePath(rel);
     if (!rel) continue;
     // Skip hidden files/folders (any path segment starting with '.')
     if (rel.split("/").some(s => s.startsWith("."))) continue;
@@ -837,7 +839,7 @@ function getDeletedPathsForRule(changes: DeltaChange[], cloudFolder: string): st
   const deleted: string[] = [];
   for (const c of changes) {
     if (!c.deleted || !c.path) continue;
-    const rel = stripPrefix(c.path, pfx);
+    const rel = normalizeRelativePath(stripPrefix(c.path, pfx));
     if (rel) deleted.push(rel);
   }
   return deleted;

@@ -7,6 +7,12 @@ export function normalizePath(p: string): string {
   return p.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, "").replace(/\/+/g, "/");
 }
 
+/** Normalize a relative file/folder path: strip leading slashes, collapse double slashes.
+ *  Preserves trailing "/" for folder entries. Used at provider→pipeline boundaries. */
+export function normalizeRelativePath(p: string): string {
+  return p.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/\/+/g, "/");
+}
+
 /** Join cloud folder + relative path into a clean cloud path */
 export function joinCloudPath(cloudFolder: string, relativePath: string): string {
   const folder = cloudFolder.replace(/\/+$/, "");

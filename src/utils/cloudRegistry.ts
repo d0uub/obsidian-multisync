@@ -9,6 +9,8 @@
  * Each record: key = accountId, value = CloudFileEntry[].
  */
 
+import { normalizeRelativePath } from "./helpers";
+
 export interface CloudFileEntry {
   /** Cloud-provider-specific unique ID (e.g. OneDrive item ID) */
   id: string;
@@ -59,6 +61,8 @@ export async function saveCloudRegistry(
   entries: CloudFileEntry[],
   unsyncable?: { path: string; name: string; size: number; reason: string }[]
 ): Promise<void> {
+  // Normalize paths to prevent leading-slash or double-slash issues from providers
+  for (const e of entries) e.path = normalizeRelativePath(e.path);
   const record: CloudRegistryRecord = { entries, lastSyncAt: Date.now(), unsyncable: unsyncable || [] };
   const db = await openDB();
   return new Promise((resolve, reject) => {
