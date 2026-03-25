@@ -1,7 +1,3 @@
-Optimizing tool selection...Here is a revised and more polished version of your README introduction and feature list, with improved grammar and clarity. I have also completed any incomplete sentences and enhanced the flow for better readability:
-
----
-
 # 🔄 Obsidian MultiSync
 
 > **Sync individual vault folders with multiple cloud drives — simultaneously.**
