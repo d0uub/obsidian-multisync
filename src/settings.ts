@@ -65,7 +65,7 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
   private createRemoveIcon(parent: HTMLElement, onClick: () => Promise<void>): HTMLSpanElement {
     const span = parent.createSpan({ cls: "mobile-option-setting-item-remove-icon" });
     setIcon(span, "minus-circle");
-    span.addEventListener("click", (e) => { e.stopPropagation(); onClick(); });
+    span.addEventListener("click", (e) => { e.stopPropagation(); void onClick(); });
     return span;
   }
 
@@ -257,7 +257,7 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
         nameSpan.removeClass("is-hidden");
       };
 
-      textInput.addEventListener("blur", finish);
+      textInput.addEventListener("blur", () => { void finish(); });
       textInput.addEventListener("keydown", (e: KeyboardEvent) => {
         if (e.key === "Enter") { e.preventDefault(); textInput.blur(); }
         else if (e.key === "Escape") { textInput.value = account.name; textInput.blur(); }
@@ -342,10 +342,10 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
     }
   }
 
-  private createClickableIcon(parent: HTMLElement, iconId: string, tooltip: string, onClick: () => void): HTMLSpanElement {
+  private createClickableIcon(parent: HTMLElement, iconId: string, tooltip: string, onClick: () => void | Promise<void>): HTMLSpanElement {
     const span = parent.createSpan({ cls: "clickable-icon", attr: { "aria-label": tooltip } });
     setIcon(span, iconId);
-    span.addEventListener("click", (e) => { e.stopPropagation(); onClick(); });
+    span.addEventListener("click", (e) => { e.stopPropagation(); void onClick(); });
     return span;
   }
 
@@ -505,17 +505,19 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
     row.addEventListener("dragleave", () => {
       row.classList.remove("drag-over");
     });
-    row.addEventListener("drop", async (e) => {
+    row.addEventListener("drop", (e) => {
       e.preventDefault();
       row.classList.remove("drag-over");
       const from = this.dragSourceIndex;
       const to = index;
       if (from !== to && from >= 0) {
-        const arr = this.plugin.settings.rules;
-        const [moved] = arr.splice(from, 1);
-        arr.splice(to, 0, moved);
-        await this.plugin.saveSettings();
-        this.display();
+        void (async () => {
+          const arr = this.plugin.settings.rules;
+          const [moved] = arr.splice(from, 1);
+          arr.splice(to, 0, moved);
+          await this.plugin.saveSettings();
+          this.display();
+        })();
       }
     });
     } // end if (!advancedMode) — drag handle
@@ -645,10 +647,9 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
       });
       if (r.id === step.ruleId) opt.selected = true;
     }
-    ruleSelect.addEventListener("change", async () => {
+    ruleSelect.addEventListener("change", () => {
       step.ruleId = ruleSelect.value;
-      await this.plugin.saveSettings();
-      this.display();
+      void this.plugin.saveSettings().then(() => this.display());
     });
 
     nameSpan.createEl("span", { text: " → " });
@@ -660,10 +661,9 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
       const opt = opSelect.createEl("option", { text: op.label, value: op.value });
       if (op.value === step.operation) opt.selected = true;
     }
-    opSelect.addEventListener("change", async () => {
+    opSelect.addEventListener("change", () => {
       step.operation = opSelect.value as SyncOpType;
-      await this.plugin.saveSettings();
-      this.display();
+      void this.plugin.saveSettings().then(() => this.display());
     });
 
     // ── Drag handle ──
@@ -689,18 +689,20 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
     row.addEventListener("dragleave", () => {
       row.classList.remove("drag-over");
     });
-    row.addEventListener("drop", async (e) => {
+    row.addEventListener("drop", (e) => {
       e.preventDefault();
       row.classList.remove("drag-over");
       const from = this.dragSourceIndex;
       const to = index;
       if (from !== to && from >= 0) {
-        const arr = this.plugin.settings.pipeline;
-        const [moved] = arr.splice(from, 1);
-        arr.splice(to, 0, moved);
-        this.expandedSteps.clear();
-        await this.plugin.saveSettings();
-        this.display();
+        void (async () => {
+          const arr = this.plugin.settings.pipeline;
+          const [moved] = arr.splice(from, 1);
+          arr.splice(to, 0, moved);
+          this.expandedSteps.clear();
+          await this.plugin.saveSettings();
+          this.display();
+        })();
       }
     });
   }
@@ -838,8 +840,7 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
       });
       const list = modal.contentEl.createEl("ul");
       list.createEl("li", {
-        // eslint-disable-next-line obsidianmd/ui/sentence-case -- Docs, Sheets, Slides are product names
-        text: "Google native files (Docs, Sheets, Slides, etc.) are not supported and will be skipped.",
+        text: "Google native files (docs, sheets, slides, etc.) are not supported and will be skipped.",
       });
       list.createEl("li", {
         text: "Duplicate file or folder names in the same directory are not supported and may cause sync issues.",

@@ -128,7 +128,7 @@ export class DropboxProvider implements ICloudProvider {
       } catch (e: any) {
         if ((e?.status === 429 || e?.message?.includes("429")) && attempt < 2) {
           const wait = Math.pow(2, attempt + 1) * 1000;
-          console.log(`Dropbox: rate limited, retrying in ${wait/1000}s...`);
+          console.debug(`Dropbox: rate limited, retrying in ${wait/1000}s...`);
           await new Promise(r => setTimeout(r, wait));
           continue;
         }
@@ -168,7 +168,7 @@ export class DropboxProvider implements ICloudProvider {
       } catch (e: any) {
         if ((e?.status === 429 || e?.message?.includes("429")) && attempt < 2) {
           const wait = Math.pow(2, attempt + 1) * 1000;
-          console.log(`Dropbox: rate limited, retrying in ${wait / 1000}s...`);
+          console.debug(`Dropbox: rate limited, retrying in ${wait / 1000}s...`);
           await new Promise(r => setTimeout(r, wait));
           continue;
         }

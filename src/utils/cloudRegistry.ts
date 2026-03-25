@@ -49,7 +49,7 @@ function openDB(): Promise<IDBDatabase> {
       }
     };
     req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+    req.onerror = () => reject(req.error ?? new Error("IndexedDB open failed"));
   });
 }
 
@@ -65,7 +65,7 @@ export async function saveCloudRegistry(
     const tx = db.transaction(STORE_NAME, "readwrite");
     tx.objectStore(STORE_NAME).put(record, accountId);
     tx.oncomplete = () => { db.close(); resolve(); };
-    tx.onerror = () => { db.close(); reject(tx.error); };
+    tx.onerror = () => { db.close(); reject(tx.error ?? new Error("IndexedDB transaction failed")); };
   });
 }
 
@@ -84,7 +84,7 @@ async function loadCloudRegistryRaw(accountId: string): Promise<CloudRegistryRec
     const tx = db.transaction(STORE_NAME, "readonly");
     const req = tx.objectStore(STORE_NAME).get(accountId);
     req.onsuccess = () => { db.close(); resolve(req.result || null); };
-    req.onerror = () => { db.close(); reject(req.error); };
+    req.onerror = () => { db.close(); reject(req.error ?? new Error("IndexedDB read failed")); };
   });
 }
 
@@ -102,7 +102,7 @@ export async function deleteCloudRegistry(accountId: string): Promise<void> {
     const tx = db.transaction(STORE_NAME, "readwrite");
     tx.objectStore(STORE_NAME).delete(accountId);
     tx.oncomplete = () => { db.close(); resolve(); };
-    tx.onerror = () => { db.close(); reject(tx.error); };
+    tx.onerror = () => { db.close(); reject(tx.error ?? new Error("IndexedDB delete failed")); };
   });
 }
 

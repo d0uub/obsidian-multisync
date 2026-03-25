@@ -144,18 +144,16 @@ export default class MultiSyncPlugin extends Plugin {
       await this.loadData()
     );
     // Migrate: move legacy deltaTokens map into account objects
-    // eslint-disable-next-line @typescript-eslint/no-deprecated -- intentional migration of old settings format
-    if (this.settings.deltaTokens) {
-      // eslint-disable-next-line @typescript-eslint/no-deprecated
-      for (const [id, token] of Object.entries(this.settings.deltaTokens)) {
+    const legacySettings = this.settings as unknown as Record<string, unknown>;
+    if (legacySettings.deltaTokens) {
+      for (const [id, token] of Object.entries(legacySettings.deltaTokens as Record<string, string>)) {
         const acct = this.settings.accounts.find(a => a.id === id);
         if (acct) {
           if (!acct.deltaTokens) acct.deltaTokens = {};
           if (!acct.deltaTokens["me"]) acct.deltaTokens["me"] = token;
         }
       }
-      // eslint-disable-next-line @typescript-eslint/no-deprecated
-      delete this.settings.deltaTokens;
+      delete legacySettings.deltaTokens;
       await this.saveData(this.settings);
     }
     // Migrate: single deltaToken → deltaTokens map
@@ -581,7 +579,6 @@ export default class MultiSyncPlugin extends Plugin {
   /** Run the sync pipeline */
   async runSync(dryRun = false) {
     if (this.syncing) {
-      // eslint-disable-next-line obsidianmd/ui/sentence-case -- MultiSync is the plugin name
       new Notice("MultiSync: sync already in progress.");
       return;
     }
@@ -602,7 +599,6 @@ export default class MultiSyncPlugin extends Plugin {
     }
 
     if (pipeline.length === 0) {
-      // eslint-disable-next-line obsidianmd/ui/sentence-case -- MultiSync is the plugin name
       new Notice("MultiSync: no rules or pipeline steps configured. Go to settings.");
       return;
     }

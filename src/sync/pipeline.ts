@@ -176,7 +176,7 @@ export async function runPipeline(
 
       accountRegistries.set(account.id, registry);
       accountDeltas.set(account.id, deltas);
-      console.log(`[Sync][Delta] ${account.name}: token=${existingToken ? "incremental" : "first-sync"}, registry=${registry.length} entries, deltas=${deltas.length} changes, base=${base.length} entries`);
+      console.debug(`[Sync][Delta] ${account.name}: token=${existingToken ? "incremental" : "first-sync"}, registry=${registry.length} entries, deltas=${deltas.length} changes, base=${base.length} entries`);
     } catch (e: any) {
       errors.push(`Failed to sync delta for ${account.name}: ${e?.message || e}`);
     }
@@ -230,7 +230,7 @@ export async function runPipeline(
           verified.push(a);
         }
         if (actions.length !== verified.length) {
-          console.log(`[Sync][HashVerify] ${step.operation}: skipped ${actions.length - verified.length} false updates (hash match)`);
+          console.debug(`[Sync][HashVerify] ${step.operation}: skipped ${actions.length - verified.length} false updates (hash match)`);
         }
         actions = verified;
       }
@@ -244,18 +244,18 @@ export async function runPipeline(
         return size <= maxBytes;
       });
       if (actions.length < beforeCount) {
-        console.log(`[Sync][SizeFilter] ${step.operation}: skipped ${beforeCount - actions.length} files exceeding ${ctx.settings.maxFileSizeMB || 200} MB`);
+        console.debug(`[Sync][SizeFilter] ${step.operation}: skipped ${beforeCount - actions.length} files exceeding ${ctx.settings.maxFileSizeMB || 200} MB`);
       }
 
       // Diagnostic logging for troubleshooting false-positive detections
       if (actions.length > 0) {
-        console.log(`[Sync][Detect] ${step.operation} for ${account.name}: ${actions.length} actions, cloudList=${cache.cloudList.length}, localList=${cache.localList.length}, basePaths=${basePaths?.size ?? "null"}, deltas=${cloudDeletedPaths.length}`);
+        console.debug(`[Sync][Detect] ${step.operation} for ${account.name}: ${actions.length} actions, cloudList=${cache.cloudList.length}, localList=${cache.localList.length}, basePaths=${basePaths?.size ?? "null"}, deltas=${cloudDeletedPaths.length}`);
         for (const a of actions.slice(0, 5)) {
           const cloudEntry = cache.cloudList.find(c => c.path === a.path);
           const localEntry = cache.localList.find(l => l.path === a.path);
-          console.log(`  ${a.operation} "${a.path}" | cloud: mtime=${cloudEntry?.mtime} size=${cloudEntry?.size} hash=${cloudEntry?.hash?.slice(0,8)} | local: mtime=${localEntry?.mtime} size=${localEntry?.size} | source: mtime=${a.sourceEntry?.mtime} size=${a.sourceEntry?.size}`);
+          console.debug(`  ${a.operation} "${a.path}" | cloud: mtime=${cloudEntry?.mtime} size=${cloudEntry?.size} hash=${cloudEntry?.hash?.slice(0,8)} | local: mtime=${localEntry?.mtime} size=${localEntry?.size} | source: mtime=${a.sourceEntry?.mtime} size=${a.sourceEntry?.size}`);
         }
-        if (actions.length > 5) console.log(`  ... and ${actions.length - 5} more`);
+        if (actions.length > 5) console.debug(`  ... and ${actions.length - 5} more`);
       }
 
       ctx.onProgress?.(`${actions.length} action(s) for ${step.operation}`);
@@ -285,10 +285,10 @@ export async function runPipeline(
       if (!confirmed) {
         // Rollback ALL processed accounts to their pre-Phase-1 state
         for (const [accountId, base] of accountBases) {
-          console.log(`[Sync][Rollback] ${accountId}: restoring ${base.length} entries`);
+          console.debug(`[Sync][Rollback] ${accountId}: restoring ${base.length} entries`);
           await saveCloudRegistry(accountId, base);
         }
-        console.log("[Sync] User cancelled from summary — registry rolled back to pre-sync state");
+        console.debug("[Sync] User cancelled from summary — registry rolled back to pre-sync state");
         return { actionsExecuted: 0, errors: [] };
       }
     }
@@ -319,7 +319,7 @@ export async function runPipeline(
             const dest = OP_DEST[action.operation] || "";
             const toCloud = ["local-add", "local-update", "local-delete"].includes(action.operation);
             const destPath = toCloud ? `${rule.cloudFolder}/${action.path}` : `${rule.localFolder}/${action.path}`;
-            console.log(`${arrow} ${account.name}${providerLabel ? ` (${providerLabel})` : ""} ${opLabel}: ${dest} ${destPath}`);
+            console.debug(`${arrow} ${account.name}${providerLabel ? ` (${providerLabel})` : ""} ${opLabel}: ${dest} ${destPath}`);
             if (!ctx.dryRun) {
               const executed = await executeAction(action, rule, provider, ctx);
               if (!executed) continue; // hash match — skipped
@@ -354,7 +354,7 @@ export async function runPipeline(
           const toCloud = ["local-add", "local-update", "local-delete"].includes(action.operation);
           const destPath = toCloud ? `${rule.cloudFolder}/${action.path}` : `${rule.localFolder}/${action.path}`;
           const sizeMB = ((action.sourceEntry?.size || 0) / 1e6).toFixed(0);
-          console.log(`${arrow} ${account.name} ${opLabel}: ${dest} ${destPath} (${sizeMB} MB, sequential)`);
+          console.debug(`${arrow} ${account.name} ${opLabel}: ${dest} ${destPath} (${sizeMB} MB, sequential)`);
           if (!ctx.dryRun) {
             const executed = await executeAction(action, rule, provider, ctx);
             if (!executed) continue;
@@ -381,7 +381,7 @@ export async function runPipeline(
         const cached = listCaches.get(rule.id);
         if (cached) {
           if (["cloud-add", "cloud-update", "cloud-delete"].includes(step.operation)) {
-            cached.localList = await listLocalFiles(ctx.app, rule.localFolder);
+            cached.localList = listLocalFiles(ctx.app, rule.localFolder);
           } else {
             cached.cloudList = await provider.listFiles(rule.cloudFolder);
             updateAccountRegistryFromCloudList(accountRegistries, account.id, rule.cloudFolder, cached.cloudList);
@@ -473,7 +473,7 @@ export class SyncSummaryModal extends Modal {
     if (s.add > 0) counts.createEl("span", { text: `➕ Add: ${s.add}` });
     if (s.update > 0) counts.createEl("span", { text: `↻ Update: ${s.update}` });
     if (s.delete > 0) {
-      const del = counts.createEl("span", { text: `🗑 Delete: ${s.delete}`, cls: "multisync-summary-delete" });
+      counts.createEl("span", { text: `🗑 Delete: ${s.delete}`, cls: "multisync-summary-delete" });
     }
 
     // Per-operation expandable details: ↑ <icon> (driveName) Upload: ☁ N file(s)
@@ -504,7 +504,7 @@ export class SyncSummaryModal extends Modal {
         list.createEl("div", { text: fullPath });
       }
       if (d.paths.length > maxShow) {
-        const more = list.createEl("div", { text: `… and ${d.paths.length - maxShow} more`, cls: "multisync-summary-more" });
+        list.createEl("div", { text: `… and ${d.paths.length - maxShow} more`, cls: "multisync-summary-more" });
       }
     }
 
@@ -765,7 +765,7 @@ async function getOrFetchLists(
 ): Promise<ListCache> {
   if (cache.has(rule.id)) return cache.get(rule.id)!;
 
-  const localList = await listLocalFiles(ctx.app, rule.localFolder);
+  const localList = listLocalFiles(ctx.app, rule.localFolder);
 
   const registry = accountRegistries.get(account.id);
   const cloudList = registry?.length
