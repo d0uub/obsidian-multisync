@@ -33,10 +33,17 @@ export function fileName(p: string): string {
 export function setSvgContent(el: HTMLElement, svgString: string): void {
   el.empty();
   if (!svgString) return;
+  // Ensure xmlns is present for DOMParser
+  let s = svgString;
+  if (s.includes("<svg") && !s.includes("xmlns")) {
+    s = s.replace("<svg", '<svg xmlns="http://www.w3.org/2000/svg"');
+  }
   const parser = new DOMParser();
-  const doc = parser.parseFromString(svgString, "image/svg+xml");
+  const doc = parser.parseFromString(s, "image/svg+xml");
+  const errorNode = doc.querySelector("parsererror");
+  if (errorNode) return;
   const svg = doc.documentElement;
   if (svg && svg.nodeName === "svg") {
-    el.appendChild(el.doc.importNode(svg, true));
+    el.appendChild((el.ownerDocument || document).importNode(svg, true));
   }
 }

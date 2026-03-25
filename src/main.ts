@@ -28,6 +28,8 @@ export default class MultiSyncPlugin extends Plugin {
   private fileTreeStyleEl: HTMLStyleElement | null = null;
   /** Cloud-only files per local folder path */
   private ghostFileMap: Map<string, { name: string; size: number; providerType: CloudProviderType; reason?: string }[]> = new Map();
+  /** Quota cache per account ID */
+  private quotaMap = new Map<string, { used: number; total: number } | null>();
   async onload() {
     await this.loadSettings();
     this.initProviders();
@@ -121,6 +123,7 @@ export default class MultiSyncPlugin extends Plugin {
     this.app.workspace.onLayoutReady(() => {
       this.setupFileTreeIcons();
       void this.refreshGhostFiles();
+      void this.refreshQuotas();
     });
   }
 
@@ -128,9 +131,10 @@ export default class MultiSyncPlugin extends Plugin {
     this.providers.clear();
     this.fileTreeObserver?.disconnect();
     this.fileTreeStyleEl?.remove();
-    // Remove injected provider icons and ghost files
+    // Remove injected provider icons, ghost files, and quota spans
     document.querySelectorAll(".multisync-provider-icon").forEach(el => el.remove());
     document.querySelectorAll(".multisync-ghost-file").forEach(el => el.remove());
+    document.querySelectorAll(".multisync-tree-quota").forEach(el => el.remove());
   }
 
   async loadSettings() {
@@ -169,6 +173,7 @@ export default class MultiSyncPlugin extends Plugin {
   async saveSettings() {
     await this.saveData(this.settings);
     this.setupFileTreeIcons();
+    void this.refreshQuotas();
   }
 
   /** Initialize cloud providers from saved account credentials */
@@ -239,6 +244,7 @@ export default class MultiSyncPlugin extends Plugin {
           this.fileTreeObserver!.disconnect();
           this.tagFileTreeFolders(folderProviders);
           this.injectGhostFiles();
+          this.tagQuotaInfo();
           startObserving();
         }, 150);
       });
@@ -271,6 +277,96 @@ export default class MultiSyncPlugin extends Plugin {
             el.prepend(iconSpan);
           }
         }
+      }
+    }
+  }
+
+  /** Fetch quotas for all accounts and update file tree display */
+  async refreshQuotas() {
+    for (const account of this.settings.accounts) {
+      const provider = this.providers.get(account.id);
+      if (!provider) continue;
+      try {
+        const q = await provider.getQuota();
+        this.quotaMap.set(account.id, q);
+      } catch {
+        this.quotaMap.set(account.id, null);
+      }
+    }
+    this.tagQuotaInfo();
+  }
+
+  /** Tag file tree folders with quota information to the right of folder names */
+  private tagQuotaInfo() {
+    document.querySelectorAll(".multisync-tree-quota").forEach(el => el.remove());
+
+    const folderAccounts = new Map<string, { accountId: string; type: CloudProviderType }[]>();
+    for (const rule of this.settings.rules) {
+      const folder = rule.localFolder || "/";
+      if (!folderAccounts.has(folder)) folderAccounts.set(folder, []);
+      const account = this.settings.accounts.find(a => a.id === rule.accountId);
+      if (account) {
+        folderAccounts.get(folder)!.push({ accountId: account.id, type: account.type });
+      }
+    }
+
+    const allFolderTitles = document.querySelectorAll(".nav-folder-title");
+    for (let i = 0; i < allFolderTitles.length; i++) {
+      const titleEl = allFolderTitles[i] as HTMLElement;
+      const path = titleEl.getAttribute("data-path");
+      if (!path) continue;
+      const accounts = folderAccounts.get(path);
+      if (!accounts || accounts.length === 0) continue;
+
+      for (const { accountId } of accounts) {
+        const q = this.quotaMap.get(accountId);
+        if (!q) continue;
+        const pct = Math.min(100, Math.round((q.used / q.total) * 100));
+        const usedGB = (q.used / 1e9).toFixed(1);
+        const totalGB = (q.total / 1e9).toFixed(1);
+        const color = pct > 90 ? "var(--text-error)" : pct > 70 ? "var(--text-warning)" : "var(--interactive-accent)";
+
+        const wrapper = document.createElement("span");
+        wrapper.className = "multisync-tree-quota";
+
+        // SVG donut chart (12x12)
+        const r = 4.5;
+        const circ = 2 * Math.PI * r;
+        const dashOffset = circ * (1 - pct / 100);
+        const svgNS = "http://www.w3.org/2000/svg";
+        const svg = document.createElementNS(svgNS, "svg");
+        svg.setAttribute("width", "12");
+        svg.setAttribute("height", "12");
+        svg.setAttribute("viewBox", "0 0 12 12");
+        svg.classList.add("multisync-donut");
+        const bgCircle = document.createElementNS(svgNS, "circle");
+        bgCircle.setAttribute("cx", "6");
+        bgCircle.setAttribute("cy", "6");
+        bgCircle.setAttribute("r", String(r));
+        bgCircle.setAttribute("fill", "none");
+        bgCircle.setAttribute("stroke", "var(--background-modifier-border)");
+        bgCircle.setAttribute("stroke-width", "2.5");
+        svg.appendChild(bgCircle);
+        const fgCircle = document.createElementNS(svgNS, "circle");
+        fgCircle.setAttribute("cx", "6");
+        fgCircle.setAttribute("cy", "6");
+        fgCircle.setAttribute("r", String(r));
+        fgCircle.setAttribute("fill", "none");
+        fgCircle.setAttribute("stroke", color);
+        fgCircle.setAttribute("stroke-width", "2.5");
+        fgCircle.setAttribute("stroke-dasharray", String(circ));
+        fgCircle.setAttribute("stroke-dashoffset", String(dashOffset));
+        fgCircle.setAttribute("stroke-linecap", "round");
+        fgCircle.setAttribute("transform", "rotate(-90 6 6)");
+        svg.appendChild(fgCircle);
+        wrapper.appendChild(svg);
+
+        const text = document.createElement("span");
+        text.className = "multisync-tree-quota-text";
+        text.textContent = `${usedGB}/${totalGB} GB`;
+        wrapper.appendChild(text);
+
+        titleEl.appendChild(wrapper);
       }
     }
   }
@@ -589,6 +685,7 @@ export default class MultiSyncPlugin extends Plugin {
       this.syncing = false;
       this.ribbonIconEl?.removeClass("multisync-spin");
       void this.refreshGhostFiles();
+      void this.refreshQuotas();
     }
   }
 }

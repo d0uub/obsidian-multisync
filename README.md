@@ -1,3 +1,7 @@
+Optimizing tool selection...Here is a revised and more polished version of your README introduction and feature list, with improved grammar and clarity. I have also completed any incomplete sentences and enhanced the flow for better readability:
+
+---
+
 # 🔄 Obsidian MultiSync
 
 > **Sync individual vault folders with multiple cloud drives — simultaneously.**
@@ -6,31 +10,41 @@
 
 ---
 
-## Features
+Painful drive management and content migration? With this plugin, you can simply drag and drop content for easy migration.
+
+![](migration.gif)
+
+This plugin allows you to map cloud drives to Obsidian, similar to other plugins, but with the added ability to mount multiple cloud and local folders, including subfolders within the cloud. I use it to efficiently manage my cloud drives. You can also manage these drive files with other tools outside of Obsidian, and it will handle the synchronization. This tool has greatly reduced duplication and orphaned content in my cloud drives, making them much easier to manage.
 
 - **Multi-Cloud Sync** — Sync with Dropbox, Google Drive, and OneDrive at the same time
-- **Per-Folder Mapping** — Map any vault folder to any cloud drive folder (not the whole vault)
-- **Multiple Rules** — Different folders can sync to different providers or accounts
-- **Delta Sync** — Only syncs files that actually changed since last sync
-- **Ghost Files** — See cloud-only files in the file explorer without downloading them
-- **Conflict Detection** — Handles file modification conflicts with smart merge logic
-- **Hash Verification** — Prevents false sync operations by verifying content hashes
-- **Cloud Migration** — Drag and drop files between mapped folders to migrate between providers
-- **Safe Deletion** — Confirmation dialog, cloud trash bin, and local `.trash` folder
 
----
+  ![](cloud-accounts.png)
+
+- **Per-Folder Mapping** — Folder to folder mapping, support cross drive mapping for different drive backup
+
+  ![](cloud-drive-mapping.png)
+
+## Pro Features
+
+- Unlimited Cloud Drives
+- Real-time Sync
+- Smart Content Merge
 
 ## Supported Providers
 
-| Provider | Upload | Download | Delete | Delta Sync |
-|----------|--------|----------|--------|------------|
-| Dropbox | ✅ | ✅ | ✅ | ✅ |
-| Google Drive | ✅ | ✅ | ✅ | ✅ |
-| OneDrive | ✅ | ✅ | ✅ | ✅ |
+- Dropbox
+- Google Drive
+- OneDrive
 
 More providers coming soon.
 
----
+## Content Protection
+
+Synchronization is protected with:
+
+- Sync confirmation
+- Trash bin on cloud drive
+- Trash bin on local disk (configurable in Obsidian settings)
 
 ## Installation
 
@@ -39,14 +53,6 @@ More providers coming soon.
 3. Click **Browse** and search for **"Multi Cloud Sync"**
 4. Click **Install**, then **Enable**
 
-### Manual Installation
-
-1. Download `main.js`, `manifest.json`, and `styles.css` from the [latest release](https://github.com/d0uub/obsidian-multisync/releases)
-2. Copy them to `<vault>/.obsidian/plugins/multisync/`
-3. Restart Obsidian and enable the plugin
-
----
-
 ## Quick Start
 
 1. Open plugin settings
@@ -54,43 +60,10 @@ More providers coming soon.
 3. **Add a sync rule** — pick a local folder and a cloud folder on that account
 4. Click **Sync** (or **Dry Run** first to preview changes)
 
-![Settings](img1.png)
-
 ---
 
-## How It Works
-
-- Each **sync rule** maps a local vault folder ↔ cloud folder on a specific account
-- On sync, the plugin compares local files vs cloud files using timestamps, sizes, and hashes
-- New/modified files are uploaded or downloaded as needed
-- Deleted files are moved to trash (cloud trash + local `.trash`)
-- **Ghost files** show cloud-only files in the file explorer so you know what's in the cloud
-
-![File Explorer](img2.png)
-
----
-
-## Safety
-
-| Layer | Description |
-|-------|-------------|
-| **Sync Preview** | Dry Run mode shows all changes before executing |
-| **Confirmation Dialog** | Review uploads, downloads, and deletes before they happen |
-| **Cloud Trash** | Deleted cloud files go to the provider's trash bin (recoverable) |
-| **Local Trash** | Deleted local files go to Obsidian's `.trash` folder |
-| **Hash Verification** | Content hashes prevent unnecessary overwrites |
-
----
-
-## Author
-
-**Roy**
-
-This plugin was developed through AI-assisted programming.
-
----
+This plugin was developed with AI-assisted programming.
 
 ## License
 
-[GPL-3.0](LICENSE)
-
+GPL-3.0

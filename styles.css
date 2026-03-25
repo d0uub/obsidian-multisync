@@ -214,3 +214,24 @@
   cursor: pointer;
   font-style: italic;
 }
+
+/* File tree quota display */
+.multisync-tree-quota {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  min-width: 0;
+  padding-left: 6px;
+}
+.multisync-donut {
+  flex-shrink: 0;
+}
+.multisync-tree-quota-text {
+  font-size: 0.95em;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
