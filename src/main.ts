@@ -1,4 +1,4 @@
-import { Modal, Notice, Plugin } from "obsidian";
+import { Modal, Notice, Plugin, TFolder } from "obsidian";
 import type { MultiSyncSettings, CloudAccount, CloudProviderType } from "./types";
 import { DEFAULT_SETTINGS } from "./types";
 import type { ICloudProvider } from "./providers/ICloudProvider";
@@ -111,8 +111,9 @@ export default class MultiSyncPlugin extends Plugin {
             }
             new Notice(`MultiSync: ${account.name} connected!`);
             this.settingsTab?.display();
-          } catch (e: any) {
-            new Notice(`MultiSync: ${meta.label} auth failed — ${e?.message || e}`);
+          } catch (e: unknown) {
+            const msg = e instanceof Error ? e.message : String(e);
+            new Notice(`MultiSync: ${meta.label} auth failed — ${msg}`);
           }
           this.oauth2Info = {};
         }
@@ -141,7 +142,7 @@ export default class MultiSyncPlugin extends Plugin {
     this.settings = Object.assign(
       {},
       DEFAULT_SETTINGS,
-      await this.loadData()
+      (await this.loadData()) as Partial<MultiSyncSettings>
     );
     // Migrate: move legacy deltaTokens map into account objects
     const legacySettings = this.settings as unknown as Record<string, unknown>;
@@ -224,7 +225,7 @@ export default class MultiSyncPlugin extends Plugin {
     // Remove old style sheet if any
     if (this.fileTreeStyleEl) {
       this.fileTreeStyleEl.remove();
-      this.fileTreeStyleEl = undefined as any;
+      this.fileTreeStyleEl = null;
     }
 
     // Tag DOM and observe
@@ -403,11 +404,11 @@ export default class MultiSyncPlugin extends Plugin {
       // Get local vault files under this rule's local folder
       const localFiles = new Set<string>();
       const folder = this.app.vault.getAbstractFileByPath(localFolder);
-      if (folder && "children" in folder) {
-        const collectFiles = (f: any, prefix: string) => {
-          for (const child of f.children || []) {
+      if (folder instanceof TFolder) {
+        const collectFiles = (f: TFolder, prefix: string) => {
+          for (const child of f.children) {
             const relPath = prefix ? `${prefix}/${child.name}` : child.name;
-            if ("children" in child) {
+            if (child instanceof TFolder) {
               collectFiles(child, relPath);
             } else {
               localFiles.add(relPath.toLowerCase());
@@ -579,7 +580,7 @@ export default class MultiSyncPlugin extends Plugin {
   /** Run the sync pipeline */
   async runSync(dryRun = false) {
     if (this.syncing) {
-      new Notice("MultiSync: sync already in progress.");
+      new Notice(`MultiSync: sync already in progress.`);
       return;
     }
 
@@ -599,7 +600,7 @@ export default class MultiSyncPlugin extends Plugin {
     }
 
     if (pipeline.length === 0) {
-      new Notice("MultiSync: no rules or pipeline steps configured. Go to settings.");
+      new Notice(`MultiSync: no rules or pipeline steps configured. Go to settings.`);
       return;
     }
 
@@ -672,8 +673,9 @@ export default class MultiSyncPlugin extends Plugin {
       }
       // Clear status bar after 10s
       setTimeout(() => this.statusBarEl?.setText(""), 10000);
-    } catch (e: any) {
-      new Notice(`MultiSync: Sync failed! ${e?.message || e}`);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      new Notice(`MultiSync: sync failed! ${msg}`);
       console.error("MultiSync:", e);
       this.statusBarEl?.setText("✗ sync failed");
       setTimeout(() => this.statusBarEl?.setText(""), 10000);
