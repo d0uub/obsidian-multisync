@@ -6,7 +6,7 @@
  *  - GDrive:   md5Checksum (MD5, hex encoded)
  */
 
-import { createHash } from "crypto";
+import SparkMD5 from "spark-md5";
 
 // ─── QuickXorHash (OneDrive) ───────────────────────────────────────────────
 
@@ -132,7 +132,7 @@ export async function dropboxContentHash(
  * Returns lowercase hex string matching GDrive's md5Checksum field.
  */
 export function md5Hash(buf: ArrayBuffer): string {
-  return createHash("md5").update(Buffer.from(buf)).digest("hex");
+  return SparkMD5.ArrayBuffer.hash(buf);
 }
 
 // ─── Provider dispatch ─────────────────────────────────────────────────────
