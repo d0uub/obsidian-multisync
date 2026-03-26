@@ -1,7 +1,7 @@
 {
   "id": "multisync",
   "name": "Multi Cloud Sync",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "minAppVersion": "0.15.0",
   "description": "Sync individual vault folders with multiple cloud providers (Dropbox, OneDrive, Google Drive). Per-folder mapping, 3-way snapshot sync, modular operations.",
   "author": "Roy",
