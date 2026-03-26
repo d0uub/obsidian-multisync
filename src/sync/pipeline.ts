@@ -140,7 +140,7 @@ export async function runPipeline(
           }
         }
         if (!ctx.dryRun) {
-          await saveCloudRegistry(account.id, entries, provider.unsyncableFiles || []);
+          // Don't save registry here — defer to end of execution for atomic save
           const baselineToken = await provider.getBaselineDeltaToken();
           pendingDeltaTokens.set(`${account.id}:${driveKey}`, baselineToken);
         }

@@ -126,7 +126,7 @@ export async function loadUnsyncableFiles(accountId: string): Promise<{ path: st
  * Apply delta changes to the stored registry for an account.
  * If isFullEnum is true, the changes represent the complete file list (replaces stored list).
  * Otherwise, merges incrementally: deletes remove by id, non-deletes upsert by id.
- * Saves the updated list and returns it.
+ * Returns the updated list IN-MEMORY — caller is responsible for persisting via saveCloudRegistry.
  */
 export async function applyDeltaChanges(
   accountId: string,
@@ -175,6 +175,5 @@ export async function applyDeltaChanges(
     entries = Array.from(byId.values());
   }
 
-  await saveCloudRegistry(accountId, entries);
   return entries;
 }
