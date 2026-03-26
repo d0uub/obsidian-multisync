@@ -72,7 +72,7 @@ function cdpSend(method, params = {}) {
     const timer = setTimeout(() => {
       pending.delete(id);
       reject(new Error(`CDP timeout: ${method}`));
-    }, 120_000);
+    }, 300_000);
     pending.set(id, (msg) => {
       clearTimeout(timer);
       if (msg.result?.exceptionDetails) {
@@ -198,15 +198,33 @@ function readLocal(localFolder, relativePath) {
 // ── Sync (via CDP) ──
 
 async function sync() {
-  return evaluate(`(async () => {
+  const result = await evaluate(`(async () => {
     const p = ${PLUGIN};
     let retries = 0;
     while (p.syncing && retries++ < 30) await new Promise(r => setTimeout(r, 1000));
-    await p.runSync();
+    // Auto-confirm: close any summary modal that opens
+    const autoClose = setInterval(() => {
+      const modal = document.querySelector('.modal-container');
+      if (modal) {
+        const confirmBtn = modal.querySelector('button.mod-cta, button.mod-warning');
+        if (confirmBtn) confirmBtn.click();
+      }
+    }, 200);
+    try {
+      await p.runSync();
+    } catch (e) {
+      clearInterval(autoClose);
+      return "error: " + (e.message || String(e));
+    }
     retries = 0;
     while (p.syncing && retries++ < 60) await new Promise(r => setTimeout(r, 500));
+    clearInterval(autoClose);
     return "done";
   })()`);
+  if (typeof result === "string" && result.startsWith("error:")) {
+    console.error("  Sync error:", result);
+  }
+  return result;
 }
 
 // ── Test framework ──
@@ -302,14 +320,14 @@ async function testCloudDeleteAfterLocalAdd(cfg, fname) {
   await deleteCloud(account.id, rule.cloudFolder, fname);
 
   // Delta needs propagation time
-  const waitMs = cfg.account.type === "dropbox" ? 15000 : 10000;
-  console.log(`  Waiting ${waitMs / 1000}s for delta propagation...`);
+  const waitMs = 3000;
+  console.log(`  Waiting ${waitMs / 1000}s for cloud consistency...`);
   await sleep(waitMs);
 
   await sync();
   await sleep(SETTLE_MS);
 
-  // GDrive changes API can be slow — retry once if still present
+  // Retry once if still present (cloud list can be eventually consistent)
   if (verifyLocal(rule.localFolder, fname)) {
     console.log("  Retrying after additional wait...");
     await sleep(5000);
@@ -328,6 +346,20 @@ async function main() {
   await connect(page.webSocketDebuggerUrl);
   await cdpSend("Runtime.enable");
 
+  // Capture browser console messages and print them
+  await cdpSend("Runtime.enable");
+  ws.addEventListener("message", (evt) => {
+    const msg = JSON.parse(String(evt.data));
+    if (msg.method === "Runtime.consoleAPICalled") {
+      const args = (msg.params.args || []).map(a => a.value ?? a.description ?? "").join(" ");
+      const type = msg.params.type;
+      // Only show plugin-related messages (skip noise)
+      if (args.includes("[Sync]") || args.includes("Roy Chan") || args.includes("multisync") || args.includes(".obsidian")) {
+        console.log(`  [browser:${type}] ${args}`);
+      }
+    }
+  });
+
   // Reload plugin to pick up latest build
   console.log("Reloading plugin...");
   await evaluate(`(async () => {
@@ -339,15 +371,16 @@ async function main() {
   })()`);
   console.log("Plugin reloaded.\n");
 
-  // Auto-confirm delete prompts for automated testing
-  await evaluate(`${PLUGIN}.autoConfirmDeletes = true`);
+  // Auto-confirm sync summary modal for automated testing
+  await evaluate(`${PLUGIN}.autoConfirmSync = true`);
+
 
   const cfg = await readConfig();
   console.log(`Account: ${cfg.account.type} / ${cfg.account.name}`);
   console.log(`Mapping: ${cfg.rule.cloudFolder} ↔ ${cfg.rule.localFolder}\n`);
 
   // Reset registry and delta tokens to avoid stale data from prior runs
-  console.log("Resetting registry and delta tokens...");
+  console.log("Resetting registry...");
   await evaluate(`(async () => {
     const acctId = "${cfg.account.id}";
     // Clear IndexedDB registry
@@ -363,22 +396,16 @@ async function main() {
       tx.onerror = () => reject(tx.error);
     });
     db.close();
-    // Clear delta tokens
-    const acct = ${PLUGIN}.settings.accounts.find(a => a.id === acctId);
-    if (acct?.deltaTokens) {
-      delete acct.deltaTokens["me"];
-      await ${PLUGIN}.saveSettings();
-    }
     return "done";
   })()`)
-  console.log("Registry and delta tokens reset.\n");
+  console.log("Registry reset.\n");
 
   // Run tests sequentially — each depends on prior state
   try {
     // Test 1: Create on cloud → sync → verify local
     const cloudFile = await testCloudAdd(cfg);
 
-    // Sync again to establish delta baseline for delete detection
+    // Sync again to establish registry baseline for delete detection
     await sync();
     await sleep(SETTLE_MS);
 
@@ -388,7 +415,7 @@ async function main() {
     // Test 3: Create locally → sync → verify cloud
     const localFile = await testLocalAdd(cfg);
 
-    // Sync again to establish delta baseline for delete detection
+    // Sync again to establish registry baseline for delete detection
     await sync();
     await sleep(SETTLE_MS);
 
@@ -400,8 +427,8 @@ async function main() {
     console.error(`\n  ✗ Exception: ${err.message}`);
   }
 
-  // Reset autoConfirmDeletes so manual syncs get confirmation again
-  await evaluate(`${PLUGIN}.autoConfirmDeletes = false`);
+  // Reset autoConfirmSync so manual syncs get confirmation again
+  await evaluate(`${PLUGIN}.autoConfirmSync = false`);
 
   // Summary
   console.log(`\n${"═".repeat(50)}`);

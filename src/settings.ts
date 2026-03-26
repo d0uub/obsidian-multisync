@@ -3,6 +3,7 @@ import {
   App,
   Modal,
   Notice,
+  Platform,
   PluginSettingTab,
   Setting,
   setIcon,
@@ -130,7 +131,7 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
     // Backup before cloud delete — hidden (default off, cloud has its own trash)
     // this.plugin.settings.backupBeforeCloudDelete is respected if already set
 
-    const isMobile = (this.app as any).isMobile || typeof (globalThis as any).capacitor !== "undefined";
+    const isMobile = Platform.isMobile;
     const maxLimit = isMobile ? 20 : 200;
     const curMax = Math.min(this.plugin.settings.maxFileSizeMB || maxLimit, maxLimit);
     new Setting(syncItems)
@@ -170,17 +171,9 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
       )
       .addButton((btn) =>
         btn
-          .setButtonText("Dry run")
-          .onClick(async () => {
-            await this.plugin.runSync(true);
-          })
-      )
-      .addButton((btn) =>
-        btn
           .setButtonText("Clear cache")
           .onClick(async () => {
             for (const a of this.plugin.settings.accounts) {
-              a.deltaTokens = undefined;
               await deleteCloudRegistry(a.id);
             }
             await this.plugin.saveSettings();

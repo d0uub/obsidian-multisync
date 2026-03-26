@@ -1,6 +1,6 @@
 {
   "name": "obsidian-multisync",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Multi-cloud folder sync for Obsidian",
   "author": "Roy",
   "main": "main.js",

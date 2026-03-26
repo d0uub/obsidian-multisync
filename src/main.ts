@@ -23,6 +23,8 @@ export default class MultiSyncPlugin extends Plugin {
   private ribbonIconEl: HTMLElement | null = null;
   private statusBarEl: HTMLElement | null = null;
   private syncing = false;
+  /** Set to true by e2e tests to auto-confirm the sync summary modal. */
+  autoConfirmSync = false;
   settingsTab: MultiSyncSettingsTab | null = null;
   private fileTreeObserver: MutationObserver | null = null;
   private fileTreeStyleEl: HTMLStyleElement | null = null;
@@ -49,15 +51,6 @@ export default class MultiSyncPlugin extends Plugin {
       name: "Run sync pipeline",
       callback: async () => {
         await this.runSync();
-      },
-    });
-
-    // Command: Dry run (preview actions without executing)
-    this.addCommand({
-      id: "dry-run-sync",
-      name: "Dry run sync (preview only)",
-      callback: async () => {
-        await this.runSync(true);
       },
     });
 
@@ -578,7 +571,7 @@ export default class MultiSyncPlugin extends Plugin {
   }
 
   /** Run the sync pipeline */
-  async runSync(dryRun = false) {
+  async runSync() {
     if (this.syncing) {
       new Notice(`Sync already in progress.`);
       return;
@@ -609,7 +602,7 @@ export default class MultiSyncPlugin extends Plugin {
     this.ribbonIconEl?.addClass("multisync-spin");
     this.statusBarEl?.setText("⟳ syncing…");
 
-    new Notice(dryRun ? "Dry run starting..." : "Starting sync...");
+    new Notice("Starting sync...");
     const startTime = Date.now();
     let totalActions = 0;
     let completedActions = 0;
@@ -633,7 +626,6 @@ export default class MultiSyncPlugin extends Plugin {
         settings: this.settings,
         providers: this.providers,
         saveSettings: () => this.saveSettings(),
-        dryRun,
 
         onProgress: (msg) => {
           const m = msg.match(/(\d+) action\(s\)/);
@@ -643,11 +635,9 @@ export default class MultiSyncPlugin extends Plugin {
         onAction: (action, step) => {
           completedActions++;
           scheduleStatus();
-          if (dryRun) {
-            new Notice(`Preview: ${action.operation} ${action.path}`);
-          }
         },
         onSummary: async (summary) => {
+          if (this.autoConfirmSync) return true;
           const modal = new SyncSummaryModal(this.app, summary);
           modal.open();
           return modal.awaitResult();
@@ -656,22 +646,14 @@ export default class MultiSyncPlugin extends Plugin {
       if (statusTimer) { clearTimeout(statusTimer); flushStatus(); }
 
       const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-      const mode = dryRun ? "[DRY RUN] " : "";
       if (result.errors.length > 0) {
-        new Notice(
-          `${mode}Done in ${elapsed}s. ${result.actionsExecuted} actions, ${result.errors.length} error(s).`
-        );
-        for (const err of result.errors) {
-          console.error(err);
-        }
+        new Notice(`Done in ${elapsed}s. ${result.actionsExecuted} actions, ${result.errors.length} error(s).`);
+        for (const err of result.errors) console.error(err);
         this.statusBarEl?.setText(`✗ ${result.errors.length} error(s)`);
       } else {
-        new Notice(
-          `${mode}Done in ${elapsed}s. ${result.actionsExecuted} action(s) ${dryRun ? "detected" : "synced"}.`
-        );
+        new Notice(`Done in ${elapsed}s. ${result.actionsExecuted} action(s) synced.`);
         this.statusBarEl?.setText(`✓ synced`);
       }
-      // Clear status bar after 10s
       setTimeout(() => this.statusBarEl?.setText(""), 10000);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);

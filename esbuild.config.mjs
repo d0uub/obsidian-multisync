@@ -54,6 +54,7 @@ const ctx = await esbuild.context({
   external: [
     "obsidian",
     "electron",
+    "crypto",
     "@codemirror/autocomplete",
     "@codemirror/collab",
     "@codemirror/commands",

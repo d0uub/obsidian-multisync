@@ -160,7 +160,8 @@ export class OneDriveProvider implements ICloudProvider {
         return await fn();
       } catch (e) {
         const err = e as { status?: number; message?: string };
-        const status = err?.status || (err?.message?.match(/status (\d+)/)?.[1] && parseInt(err.message!.match(/status (\d+)/)![1]));
+        const match = err?.message?.match(/status (\d+)/);
+        const status = err?.status || (match?.[1] && parseInt(match[1]));
         if (status === 401 && attempt < maxRetries) {
           this.tokenExpiry = 0; // force refresh
           await this.ensureToken();

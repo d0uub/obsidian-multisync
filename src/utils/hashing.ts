@@ -6,6 +6,8 @@
  *  - GDrive:   md5Checksum (MD5, hex encoded)
  */
 
+import { createHash } from "crypto";
+
 // ─── QuickXorHash (OneDrive) ───────────────────────────────────────────────
 
 const SHIFT = 11;
@@ -130,9 +132,7 @@ export async function dropboxContentHash(
  * Returns lowercase hex string matching GDrive's md5Checksum field.
  */
 export function md5Hash(buf: ArrayBuffer): string {
-  // eslint-disable-next-line no-eval -- dynamic require to bypass esbuild static analysis
-  const nodeCrypto = (typeof globalThis !== "undefined" && (globalThis as any).require || eval("require"))("crypto");
-  return nodeCrypto.createHash("md5").update(Buffer.from(buf)).digest("hex");
+  return createHash("md5").update(Buffer.from(buf)).digest("hex");
 }
 
 // ─── Provider dispatch ─────────────────────────────────────────────────────

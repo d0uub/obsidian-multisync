@@ -184,7 +184,7 @@ export class GDriveProvider implements ICloudProvider {
       const data = await this.gdriveGet<{id: string}>("https://www.googleapis.com/drive/v3/files/root?fields=id");
       this.cachedRootId = data.id;
     }
-    return this.cachedRootId!;
+    return this.cachedRootId;
   }
 
   /**
@@ -225,7 +225,7 @@ export class GDriveProvider implements ICloudProvider {
         });
         parentId = createResp.json.id;
       } else {
-        parentId = data.files![0].id!;
+        parentId = data.files[0].id!;
       }
       this.folderIdCache.set(currentPath, parentId);
     }
