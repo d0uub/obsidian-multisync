@@ -6,6 +6,24 @@ import { requestUrl } from "obsidian";
 import { joinCloudPath } from "../utils/helpers";
 import { generatePKCE } from "./registry";
 
+/** OneDrive/Graph API response types */
+interface GraphItem {
+  id?: string;
+  name?: string;
+  size?: number;
+  lastModifiedDateTime?: string;
+  createdDateTime?: string;
+  folder?: Record<string, unknown>;
+  file?: { hashes?: { quickXorHash?: string } };
+  deleted?: Record<string, unknown>;
+  root?: Record<string, unknown>;
+  parentReference?: { path?: string };
+  '@microsoft.graph.downloadUrl'?: string;
+  displayName?: string;
+}
+interface GraphResponse { value?: GraphItem[]; '@odata.nextLink'?: string; '@odata.deltaLink'?: string }
+interface GraphDrive { quota?: { used?: number; total?: number }; displayName?: string }
+
 const CLIENT_ID = "03beb548-4548-4835-ba4e-18ac1f469442";
 const SCOPES = "User.Read Files.ReadWrite.All offline_access";
 const AUTHORITY = "https://login.microsoftonline.com/common";
@@ -140,8 +158,9 @@ export class OneDriveProvider implements ICloudProvider {
     for (let attempt = 0; ; attempt++) {
       try {
         return await fn();
-      } catch (e: any) {
-        const status = e?.status || (e?.message?.match(/status (\d+)/)?.[1] && parseInt(e.message.match(/status (\d+)/)[1]));
+      } catch (e) {
+        const err = e as { status?: number; message?: string };
+        const status = err?.status || (err?.message?.match(/status (\d+)/)?.[1] && parseInt(err.message!.match(/status (\d+)/)![1]));
         if (status === 401 && attempt < maxRetries) {
           this.tokenExpiry = 0; // force refresh
           await this.ensureToken();
@@ -158,7 +177,7 @@ export class OneDriveProvider implements ICloudProvider {
     }
   }
 
-  private async graphGet(path: string): Promise<any> {
+  private async graphGet<T = Record<string, unknown>>(path: string): Promise<T> {
     await this.ensureToken();
     return this.withRetry(async () => {
       const resp = await requestUrl({
@@ -166,11 +185,11 @@ export class OneDriveProvider implements ICloudProvider {
         method: "GET",
         headers: { Authorization: `Bearer ${this.accessToken}` },
       });
-      return resp.json;
+      return resp.json as T;
     });
   }
 
-  private async graphPut(path: string, content: ArrayBuffer): Promise<any> {
+  private async graphPut<T = Record<string, unknown>>(path: string, content: ArrayBuffer): Promise<T> {
     await this.ensureToken();
     return this.withRetry(async () => {
       const resp = await requestUrl({
@@ -182,7 +201,7 @@ export class OneDriveProvider implements ICloudProvider {
         },
         body: content,
       });
-      return resp.json;
+      return resp.json as T;
     });
   }
 
@@ -197,7 +216,7 @@ export class OneDriveProvider implements ICloudProvider {
     });
   }
 
-  private async graphPost(path: string, body: Record<string, unknown>): Promise<any> {
+  private async graphPost<T = Record<string, unknown>>(path: string, body: Record<string, unknown>): Promise<T> {
     await this.ensureToken();
     return this.withRetry(async () => {
       const resp = await requestUrl({
@@ -209,11 +228,11 @@ export class OneDriveProvider implements ICloudProvider {
         },
         body: JSON.stringify(body),
       });
-      return resp.json;
+      return resp.json as T;
     });
   }
 
-  private async graphPatch(path: string, body: Record<string, unknown>): Promise<any> {
+  private async graphPatch<T = Record<string, unknown>>(path: string, body: Record<string, unknown>): Promise<T> {
     await this.ensureToken();
     return this.withRetry(async () => {
       const resp = await requestUrl({
@@ -225,7 +244,7 @@ export class OneDriveProvider implements ICloudProvider {
         },
         body: JSON.stringify(body),
       });
-      return resp.json;
+      return resp.json as T;
     });
   }
 
@@ -265,11 +284,12 @@ export class OneDriveProvider implements ICloudProvider {
 
     let url: string = deltaPath;
     while (url) {
-      let data: any;
+      let data: GraphResponse;
       try {
-        data = await this.graphGetRaw(url);
-      } catch (e: any) {
-        if (e?.status === 404 || e?.message?.includes("404")) return entries;
+        data = await this.graphGetRaw<GraphResponse>(url);
+      } catch (e) {
+        const err = e as { status?: number; message?: string };
+        if (err?.status === 404 || err?.message?.includes("404")) return entries;
         throw e;
       }
       for (const item of data.value || []) {
@@ -293,17 +313,17 @@ export class OneDriveProvider implements ICloudProvider {
         // Filter to items under our cloudFolder
         let relativePath: string;
         if (prefix) {
-          if (!fullPath.startsWith(prefix + "/") && fullPath !== prefix) continue;
-          relativePath = fullPath.substring(prefix.length + 1);
+          if (!fullPath!.startsWith(prefix + "/") && fullPath !== prefix) continue;
+          relativePath = fullPath!.substring(prefix.length + 1);
         } else {
-          relativePath = fullPath;
+          relativePath = fullPath!;
         }
         if (!relativePath) continue;
 
         const isFolder = !!item.folder;
         entries.push({
           path: isFolder ? relativePath + "/" : relativePath,
-          mtime: new Date(item.lastModifiedDateTime).getTime(),
+          mtime: new Date(item.lastModifiedDateTime!).getTime(),
           size: item.size || 0,
           isFolder,
           hash: item.file?.hashes?.quickXorHash,
@@ -313,7 +333,7 @@ export class OneDriveProvider implements ICloudProvider {
       }
 
       if (data["@odata.nextLink"]) {
-        url = (data["@odata.nextLink"] as string).replace("https://graph.microsoft.com/v1.0", "");
+        url = data["@odata.nextLink"].replace("https://graph.microsoft.com/v1.0", "");
       } else {
         url = "";
       }
@@ -322,7 +342,7 @@ export class OneDriveProvider implements ICloudProvider {
     return entries;
   }
 
-  private async graphGetRaw(pathOrUrl: string): Promise<any> {
+  private async graphGetRaw<T = Record<string, unknown>>(pathOrUrl: string): Promise<T> {
     await this.ensureToken();
     const url = pathOrUrl.startsWith("http")
       ? pathOrUrl
@@ -333,14 +353,14 @@ export class OneDriveProvider implements ICloudProvider {
         method: "GET",
         headers: { Authorization: `Bearer ${this.accessToken}` },
       });
-      return resp.json;
+      return resp.json as T;
     });
   }
 
   async readFile(cloudFolder: string, relativePath: string): Promise<ArrayBuffer> {
     const itemPath = this.encodePath(cloudFolder, relativePath);
     // Get pre-authenticated download URL (avoids 302→401 CORS issue with /content)
-    const meta = await this.graphGet(`${itemPath}?select=id,@microsoft.graph.downloadUrl`);
+    const meta = await this.graphGet<GraphItem>(`${itemPath}?select=id,@microsoft.graph.downloadUrl`);
     const downloadUrl = meta["@microsoft.graph.downloadUrl"];
     if (!downloadUrl) throw new Error("No download URL for " + relativePath);
     const resp = await requestUrl({ url: downloadUrl, method: "GET" });
@@ -393,8 +413,8 @@ export class OneDriveProvider implements ICloudProvider {
     const fullPath = joinCloudPath(cloudFolder, relativePath);
     try {
       await this.graphDelete(`/me/drive/root:${this.encodeGraphPath(this.ensureLeadingSlash(fullPath))}:`);
-    } catch (e: any) {
-      if (e?.status === 404) return; // Already gone
+    } catch (e) {
+      if ((e as { status?: number })?.status === 404) return; // Already gone
       throw e;
     }
   }
@@ -413,9 +433,10 @@ export class OneDriveProvider implements ICloudProvider {
         folder: {},
         "@microsoft.graph.conflictBehavior": "fail",
       });
-    } catch (e: any) {
+    } catch (e) {
       // Ignore if already exists (409 conflict)
-      if (e?.status === 409 || e?.message?.includes("nameAlreadyExists")) return;
+      const err = e as { status?: number; message?: string };
+      if (err?.status === 409 || err?.message?.includes("nameAlreadyExists")) return;
       throw e;
     }
   }
@@ -431,12 +452,12 @@ export class OneDriveProvider implements ICloudProvider {
   async stat(cloudFolder: string, relativePath: string): Promise<FileEntry | null> {
     const fullPath = joinCloudPath(cloudFolder, relativePath);
     try {
-      const data = await this.graphGet(
+      const data = await this.graphGet<GraphItem>(
         `/me/drive/root:${this.encodeGraphPath(this.ensureLeadingSlash(fullPath))}:?$select=name,size,lastModifiedDateTime,createdDateTime,folder,file`
       );
       return {
         path: relativePath,
-        mtime: new Date(data.lastModifiedDateTime).getTime(),
+        mtime: new Date(data.lastModifiedDateTime!).getTime(),
         size: data.size || 0,
         isFolder: !!data.folder,
         hash: data.file?.hashes?.quickXorHash,
@@ -449,7 +470,7 @@ export class OneDriveProvider implements ICloudProvider {
 
   async testConnection(): Promise<boolean> {
     try {
-      await this.graphGet("/me/drive");
+      await this.graphGet<GraphDrive>("/me/drive");
       return true;
     } catch {
       return false;
@@ -480,7 +501,7 @@ export class OneDriveProvider implements ICloudProvider {
       }
 
       while (url) {
-        const data = await this.graphGetRaw(url);
+        const data = await this.graphGetRaw<GraphResponse>(url);
         // Only process items if we have a previous token (not first run)
         if (deltaToken) {
           for (const item of data.value || []) {
@@ -515,11 +536,11 @@ export class OneDriveProvider implements ICloudProvider {
 
         if (data["@odata.deltaLink"]) {
           // Extract token or store the relative URL
-          const link = data["@odata.deltaLink"] as string;
+          const link = data["@odata.deltaLink"];
           newDeltaToken = link.replace("https://graph.microsoft.com/v1.0", "");
           url = "";
         } else if (data["@odata.nextLink"]) {
-          url = (data["@odata.nextLink"] as string).replace("https://graph.microsoft.com/v1.0", "");
+          url = data["@odata.nextLink"].replace("https://graph.microsoft.com/v1.0", "");
         } else {
           url = "";
         }
@@ -556,7 +577,7 @@ export class OneDriveProvider implements ICloudProvider {
 
       let newDeltaToken = deltaToken;
       while (url) {
-        const data = await this.graphGetRaw(url);
+        const data = await this.graphGetRaw<GraphResponse>(url);
         for (const item of data.value || []) {
           if (item.root) continue; // skip drive root itself
           if (!item.parentReference?.path) continue; // skip items with no parent (root without root flag)
@@ -575,36 +596,36 @@ export class OneDriveProvider implements ICloudProvider {
           }
 
           if (item.deleted) {
-            changes.push({ id: item.id, deleted: true, path: itemPath });
+            changes.push({ id: item.id!, deleted: true, path: itemPath });
           } else {
             const isFolder = !!item.folder;
             const entry: CloudFileEntry = {
-              id: item.id,
+              id: item.id!,
               path: isFolder ? (itemPath || "") + "/" : itemPath || "",
-              mtime: new Date(item.lastModifiedDateTime).getTime(),
+              mtime: new Date(item.lastModifiedDateTime!).getTime(),
               size: item.size || 0,
               isFolder,
               hash: item.file?.hashes?.quickXorHash,
               ctime: item.createdDateTime ? new Date(item.createdDateTime).getTime() : undefined,
             };
-            changes.push({ id: item.id, deleted: false, path: itemPath, entry });
+            changes.push({ id: item.id!, deleted: false, path: itemPath, entry });
           }
         }
 
         if (data["@odata.deltaLink"]) {
-          newDeltaToken = (data["@odata.deltaLink"] as string).replace("https://graph.microsoft.com/v1.0", "");
+          newDeltaToken = data["@odata.deltaLink"].replace("https://graph.microsoft.com/v1.0", "");
           url = "";
         } else if (data["@odata.nextLink"]) {
-          url = (data["@odata.nextLink"] as string).replace("https://graph.microsoft.com/v1.0", "");
+          url = data["@odata.nextLink"].replace("https://graph.microsoft.com/v1.0", "");
         } else {
           url = "";
         }
       }
 
       return { changes, newDeltaToken, isFullEnum };
-    } catch (e: any) {
+    } catch (e) {
       // 410 Gone = token expired — reset and do full enum next time
-      if (e?.status === 410) {
+      if ((e as { status?: number })?.status === 410) {
         console.warn("OneDrive: delta token expired (410), will re-enumerate next sync");
         return { changes: [], newDeltaToken: "", isFullEnum: false };
       }
@@ -613,14 +634,14 @@ export class OneDriveProvider implements ICloudProvider {
   }
 
   async getBaselineDeltaToken(): Promise<string> {
-    const data = await this.graphGetRaw("/me/drive/root/delta?token=latest");
-    const link = (data["@odata.deltaLink"] as string) || "";
+    const data = await this.graphGetRaw<GraphResponse>("/me/drive/root/delta?token=latest");
+    const link = data["@odata.deltaLink"] || "";
     return link.replace("https://graph.microsoft.com/v1.0", "");
   }
 
   async getDisplayName(): Promise<string> {
     try {
-      const me = await this.graphGet("/me");
+      const me = await this.graphGet<GraphItem>("/me");
       return me.displayName || "OneDrive";
     } catch {
       return "OneDrive";
@@ -629,9 +650,9 @@ export class OneDriveProvider implements ICloudProvider {
 
   async getQuota(): Promise<{ used: number; total: number } | null> {
     try {
-      const drive = await this.graphGet("/me/drive?select=quota");
+      const drive = await this.graphGet<GraphDrive>("/me/drive?select=quota");
       const q = drive.quota;
-      if (q && q.total > 0) return { used: q.used ?? 0, total: q.total };
+      if (q && q.total && q.total > 0) return { used: q.used ?? 0, total: q.total };
       return null;
     } catch {
       return null;

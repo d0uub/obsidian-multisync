@@ -177,8 +177,8 @@ export async function runPipeline(
       accountRegistries.set(account.id, registry);
       accountDeltas.set(account.id, deltas);
       console.debug(`[Sync][Delta] ${account.name}: token=${existingToken ? "incremental" : "first-sync"}, registry=${registry.length} entries, deltas=${deltas.length} changes, base=${base.length} entries`);
-    } catch (e: any) {
-      errors.push(`Failed to sync delta for ${account.name}: ${e?.message || e}`);
+    } catch (e) {
+      errors.push(`Failed to sync delta for ${account.name}: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 
@@ -221,7 +221,7 @@ export async function runPipeline(
             const vaultPath = normalBase ? `${normalBase}/${a.path}` : a.path;
             try {
               const content = await ctx.app.vault.adapter.readBinary(vaultPath);
-              const localHash = await computeLocalHash(account.type as any, content);
+              const localHash = await computeLocalHash(account.type as "dropbox" | "gdrive" | "onedrive", content);
               if (localHash === cloudEntry.hash) {
                 continue; // Hash match — skip this false update
               }
@@ -263,8 +263,8 @@ export async function runPipeline(
       if (actions.length > 0) {
         stepActions.set(si, { step, rule, account, provider, actions });
       }
-    } catch (e: any) {
-      errors.push(`${OP_LABELS[step.operation] || step.operation}: ${e?.message || e}`);
+    } catch (e) {
+      errors.push(`${OP_LABELS[step.operation] || step.operation}: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 
@@ -333,8 +333,9 @@ export async function runPipeline(
             actionsExecuted++;
             // Yield to event loop for GC between file operations
             if (actionsExecuted % 5 === 0) await new Promise(r => setTimeout(r, 0));
-          } catch (e: any) {
-            const detail = e?.status ? `status ${e.status}` : (e?.message || e);
+          } catch (e) {
+            const err = e as { status?: number; message?: string };
+            const detail = err?.status ? `status ${err.status}` : (e instanceof Error ? e.message : String(e));
             const errLabel = OP_LABELS[action.operation] || action.operation;
             const errArrow = OP_ARROW[action.operation] || "";
             errors.push(`${errLabel} ${action.path}: ${detail}`);
@@ -365,8 +366,9 @@ export async function runPipeline(
           actionsExecuted++;
           // Force yield after large file for GC
           await new Promise(r => setTimeout(r, 0));
-        } catch (e: any) {
-          const detail = e?.status ? `status ${e.status}` : (e?.message || e);
+        } catch (e) {
+          const err = e as { status?: number; message?: string };
+          const detail = err?.status ? `status ${err.status}` : (e instanceof Error ? e.message : String(e));
           errors.push(`${OP_LABELS[action.operation] || action.operation} ${action.path}: ${detail}`);
           console.error(`ERROR ${action.path} — ${detail}`);
         }
@@ -388,8 +390,8 @@ export async function runPipeline(
           }
         }
       }
-    } catch (e: any) {
-      errors.push(`${OP_LABELS[step.operation] || step.operation}: ${e?.message || e}`);
+    } catch (e) {
+      errors.push(`${OP_LABELS[step.operation] || step.operation}: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 
@@ -668,8 +670,8 @@ async function executeAction(
             await app.vault.adapter.writeBinary(backupPath, content);
             const abstractFile = app.vault.getAbstractFileByPath(backupPath);
             if (abstractFile) await app.fileManager.trashFile(abstractFile);
-          } catch (backupErr: any) {
-            console.warn(`Skipping cloud delete for ${action.path}: backup failed — ${backupErr?.message || backupErr}`);
+          } catch (backupErr) {
+            console.warn(`Skipping cloud delete for ${action.path}: backup failed — ${backupErr instanceof Error ? backupErr.message : String(backupErr)}`);
             break;
           }
         }
@@ -686,8 +688,8 @@ async function executeAction(
       if (abstractFile) {
         try {
           await ctx.app.fileManager.trashFile(abstractFile);
-        } catch (e: any) {
-          if (e?.message?.includes("ENOENT")) break; // already gone
+        } catch (e) {
+          if (e instanceof Error && e.message?.includes("ENOENT")) break; // already gone
           throw e;
         }
       }

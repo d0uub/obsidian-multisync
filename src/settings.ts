@@ -277,8 +277,8 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
         try {
           await provider.listFiles("");
           new Notice(`${account.name}: ✓ Connected`);
-        } catch (e: any) {
-          new Notice(`${account.name}: ✗ ${e?.message || e}`);
+        } catch (e) {
+          new Notice(`${account.name}: ✗ ${e instanceof Error ? e.message : String(e)}`);
         }
       });
 
@@ -776,8 +776,8 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
       authUrl = r.authUrl;
       verifier = r.verifier;
       codePromise = r.codePromise;
-    } catch (e: any) {
-      new Notice(`OAuth error: ${e?.message || e}`);
+    } catch (e) {
+      new Notice(`OAuth error: ${e instanceof Error ? e.message : String(e)}`);
       return;
     }
 
@@ -813,8 +813,8 @@ export class MultiSyncSettingsTab extends PluginSettingTab {
         }
         new Notice(`${account.name} connected!`);
         this.display();
-      } catch (e: any) {
-        new Notice(`Auth failed: ${e?.message || e}`);
+      } catch (e) {
+        new Notice(`Auth failed: ${e instanceof Error ? e.message : String(e)}`);
       }
       this.plugin.oauth2Info = {};
     } else if (manual) {
@@ -910,8 +910,8 @@ class AuthCodeModal extends Modal {
             await this.exchangeCode(codeValue);
             new Notice(`${this.account.name} connected!`);
             this.close();
-          } catch (e: any) {
-            new Notice(`Auth failed: ${e?.message || e}`);
+          } catch (e) {
+            new Notice(`Auth failed: ${e instanceof Error ? e.message : String(e)}`);
           }
         })
       );

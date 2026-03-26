@@ -6,6 +6,13 @@ import { requestUrl } from "obsidian";
 import { normalizePath, joinCloudPath } from "../utils/helpers";
 import { generatePKCE } from "./registry";
 
+/** Dropbox API response types */
+interface DbxListResult { entries: DbxEntry[]; cursor: string; has_more: boolean }
+interface DbxEntry { '.tag': string; path_display?: string; path_lower?: string; id?: string; name?: string; client_modified?: string; server_modified?: string; size?: number; content_hash?: string }
+interface DbxCursorResult { cursor: string }
+interface DbxAccountInfo { name?: { display_name?: string } }
+interface DbxSpaceUsage { used?: number; allocation?: { allocated?: number; individual?: { allocated?: number } } }
+
 const APP_KEY = "y8k73tvwvsg3kbi";
 const CALLBACK = "multisync-cb-dropbox";
 const SVG_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M6 1.807L0 5.629l6 3.822 6.001-3.822L6 1.807zM18 1.807l-6 3.822 6 3.822 6-3.822-6-3.822zM0 13.274l6 3.822 6.001-3.822L6 9.452l-6 3.822zM18 9.452l-6 3.822 6 3.822 6-3.822-6-3.822zM6 18.371l6.001 3.822 6-3.822-6-3.822L6 18.371z"/></svg>';
@@ -111,7 +118,7 @@ export class DropboxProvider implements ICloudProvider {
     this.onTokenRefreshed?.(this.accessToken, this.refreshToken, this.tokenExpiry);
   }
 
-  private async apiRpc(endpoint: string, body: Record<string, unknown> | null): Promise<any> {
+  private async apiRpc<T = unknown>(endpoint: string, body: Record<string, unknown> | null): Promise<T> {
     await this.ensureToken();
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
@@ -124,9 +131,10 @@ export class DropboxProvider implements ICloudProvider {
           },
           body: body ? JSON.stringify(body) : "null",
         });
-        return resp.json;
-      } catch (e: any) {
-        if ((e?.status === 429 || e?.message?.includes("429")) && attempt < 2) {
+        return resp.json as T;
+      } catch (e) {
+        const err = e as { status?: number; message?: string };
+        if ((err?.status === 429 || err?.message?.includes("429")) && attempt < 2) {
           const wait = Math.pow(2, attempt + 1) * 1000;
           console.debug(`Dropbox: rate limited, retrying in ${wait/1000}s...`);
           await new Promise(r => setTimeout(r, wait));
@@ -142,7 +150,7 @@ export class DropboxProvider implements ICloudProvider {
     endpoint: string,
     apiArg: Record<string, unknown>,
     content?: ArrayBuffer
-  ): Promise<{ json: any; arrayBuffer: ArrayBuffer }> {
+  ): Promise<{ json: Record<string, unknown>; arrayBuffer: ArrayBuffer }> {
     await this.ensureToken();
     const headers: Record<string, string> = {
       Authorization: `Bearer ${this.accessToken}`,
@@ -159,14 +167,15 @@ export class DropboxProvider implements ICloudProvider {
           headers,
           body: content,
         });
-        let json: any = {};
+        let json: Record<string, unknown> = {};
         try {
           const resultHeader = resp.headers["dropbox-api-result"];
-          if (resultHeader) json = JSON.parse(resultHeader);
+          if (resultHeader) json = JSON.parse(resultHeader) as Record<string, unknown>;
         } catch { /* ignore */ }
         return { json, arrayBuffer: resp.arrayBuffer };
-      } catch (e: any) {
-        if ((e?.status === 429 || e?.message?.includes("429")) && attempt < 2) {
+      } catch (e) {
+        const err = e as { status?: number; message?: string };
+        if ((err?.status === 429 || err?.message?.includes("429")) && attempt < 2) {
           const wait = Math.pow(2, attempt + 1) * 1000;
           console.debug(`Dropbox: rate limited, retrying in ${wait / 1000}s...`);
           await new Promise(r => setTimeout(r, wait));
@@ -188,16 +197,16 @@ export class DropboxProvider implements ICloudProvider {
       await this.ensureFolder(cloudFolder);
     }
 
-    let result = await this.apiRpc("/files/list_folder", {
+    let result = await this.apiRpc<DbxListResult>("/files/list_folder", {
       path,
       recursive: true,
       include_deleted: false,
     });
 
-    const processEntries = (items: any[]) => {
+    const processEntries = (items: DbxEntry[]) => {
       for (const item of items) {
         const relativePath = normalizePath(
-          item.path_display.substring(path.length)
+          item.path_display!.substring(path.length)
         );
         if (!relativePath) continue;
         // Collect Dropbox Paper files as unsyncable
@@ -222,7 +231,7 @@ export class DropboxProvider implements ICloudProvider {
 
     processEntries(result.entries);
     while (result.has_more) {
-      result = await this.apiRpc("/files/list_folder/continue", {
+      result = await this.apiRpc<DbxListResult>("/files/list_folder/continue", {
         cursor: result.cursor,
       });
       processEntries(result.entries);
@@ -260,9 +269,10 @@ export class DropboxProvider implements ICloudProvider {
     const fullPath = joinCloudPath(cloudFolder, relativePath);
     try {
       await this.apiRpc("/files/delete_v2", { path: fullPath });
-    } catch (e: any) {
+    } catch (e) {
       // 409 = path not found (already deleted, e.g. parent folder was deleted first)
-      if (e?.status === 409 || e?.message?.includes("not_found") || e?.message?.includes("409")) return;
+      const err = e as { status?: number; message?: string };
+      if (err?.status === 409 || err?.message?.includes("not_found") || err?.message?.includes("409")) return;
       throw e;
     }
   }
@@ -271,9 +281,10 @@ export class DropboxProvider implements ICloudProvider {
     const fullPath = joinCloudPath(cloudFolder, relativePath);
     try {
       await this.apiRpc("/files/create_folder_v2", { path: fullPath });
-    } catch (e: any) {
+    } catch (e) {
       // Ignore if folder already exists (Dropbox returns 409 conflict)
-      if (e?.status === 409 || e?.message?.includes("conflict") || e?.message?.includes("409")) return;
+      const err = e as { status?: number; message?: string };
+      if (err?.status === 409 || err?.message?.includes("conflict") || err?.message?.includes("409")) return;
       throw e;
     }
   }
@@ -289,7 +300,7 @@ export class DropboxProvider implements ICloudProvider {
   async stat(cloudFolder: string, relativePath: string): Promise<FileEntry | null> {
     const fullPath = joinCloudPath(cloudFolder, relativePath);
     try {
-      const meta = await this.apiRpc("/files/get_metadata", { path: fullPath });
+      const meta = await this.apiRpc<DbxEntry>("/files/get_metadata", { path: fullPath });
       return {
         path: relativePath,
         mtime: meta.client_modified
@@ -321,7 +332,7 @@ export class DropboxProvider implements ICloudProvider {
       if (!deltaToken) {
         // First run — get a cursor baseline without enumerating existing files.
         // No deletes reported on first sync (same as OneDrive).
-        const data = await this.apiRpc("/files/list_folder/get_latest_cursor", {
+        const data = await this.apiRpc<DbxCursorResult>("/files/list_folder/get_latest_cursor", {
           path,
           recursive: true,
           include_deleted: true,
@@ -333,13 +344,14 @@ export class DropboxProvider implements ICloudProvider {
       let cursor = deltaToken;
       let hasMore = true;
       while (hasMore) {
-        let data: any;
+        let data: DbxListResult;
         try {
-          data = await this.apiRpc("/files/list_folder/continue", { cursor });
-        } catch (e: any) {
+          data = await this.apiRpc<DbxListResult>("/files/list_folder/continue", { cursor });
+        } catch (e) {
           // Cursor may be invalidated (reset error) — re-establish baseline
-          if (e?.message?.includes("reset") || e?.status === 409) {
-            const fresh = await this.apiRpc("/files/list_folder/get_latest_cursor", {
+          const err = e as { status?: number; message?: string };
+          if (err?.message?.includes("reset") || err?.status === 409) {
+            const fresh = await this.apiRpc<DbxCursorResult>("/files/list_folder/get_latest_cursor", {
               path,
               recursive: true,
               include_deleted: true,
@@ -377,7 +389,7 @@ export class DropboxProvider implements ICloudProvider {
 
       if (!deltaToken) {
         // Full enumeration from root
-        const data = await this.apiRpc("/files/list_folder", {
+        const data = await this.apiRpc<DbxListResult>("/files/list_folder", {
           path: "",
           recursive: true,
           include_deleted: false,
@@ -387,12 +399,13 @@ export class DropboxProvider implements ICloudProvider {
         hasMore = data.has_more;
       } else {
         // Incremental from stored cursor
-        let data: any;
+        let data: DbxListResult;
         try {
-          data = await this.apiRpc("/files/list_folder/continue", { cursor: deltaToken });
-        } catch (e: any) {
+          data = await this.apiRpc<DbxListResult>("/files/list_folder/continue", { cursor: deltaToken });
+        } catch (e) {
           // Cursor invalidated — re-enumerate
-          if (e?.message?.includes("reset") || e?.status === 409) {
+          const err = e as { status?: number; message?: string };
+          if (err?.message?.includes("reset") || err?.status === 409) {
             console.warn("Dropbox: cursor invalidated, will re-enumerate");
             return { changes: [], newDeltaToken: "", isFullEnum: false };
           }
@@ -404,21 +417,21 @@ export class DropboxProvider implements ICloudProvider {
       }
 
       while (hasMore) {
-        const data = await this.apiRpc("/files/list_folder/continue", { cursor });
+        const data = await this.apiRpc<DbxListResult>("/files/list_folder/continue", { cursor });
         this.processDropboxDelta(data.entries || [], changes);
         cursor = data.cursor;
         hasMore = data.has_more;
       }
 
       return { changes, newDeltaToken: cursor, isFullEnum };
-    } catch (e: any) {
+    } catch (e) {
       console.error("Dropbox syncAccountDelta error:", e);
       return { changes: [], newDeltaToken: "", isFullEnum: false };
     }
   }
 
   async getBaselineDeltaToken(): Promise<string> {
-    const data = await this.apiRpc("/files/list_folder/get_latest_cursor", {
+    const data = await this.apiRpc<DbxCursorResult>("/files/list_folder/get_latest_cursor", {
       path: "",
       recursive: true,
       include_deleted: true,
@@ -427,7 +440,7 @@ export class DropboxProvider implements ICloudProvider {
   }
 
   /** Parse Dropbox entries into DeltaChange[] */
-  private processDropboxDelta(entries: any[], changes: DeltaChange[]): void {
+  private processDropboxDelta(entries: DbxEntry[], changes: DeltaChange[]): void {
     for (const item of entries) {
       const tag = item[".tag"];
       // Dropbox path_display starts with /, strip leading slash for consistency
@@ -456,7 +469,7 @@ export class DropboxProvider implements ICloudProvider {
 
   async getDisplayName(): Promise<string> {
     try {
-      const account = await this.apiRpc("/users/get_current_account", null);
+      const account = await this.apiRpc<DbxAccountInfo>("/users/get_current_account", null);
       return account.name?.display_name || "Dropbox";
     } catch {
       return "Dropbox";
@@ -465,7 +478,7 @@ export class DropboxProvider implements ICloudProvider {
 
   async getQuota(): Promise<{ used: number; total: number } | null> {
     try {
-      const data = await this.apiRpc("/users/get_space_usage", null);
+      const data = await this.apiRpc<DbxSpaceUsage>("/users/get_space_usage", null);
       const used = data.used ?? 0;
       const alloc = data.allocation;
       const total = alloc?.allocated ?? alloc?.individual?.allocated ?? 0;

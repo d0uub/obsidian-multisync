@@ -81,7 +81,7 @@ export default class MultiSyncPlugin extends Plugin {
         meta.callbackProtocol,
         async (params) => {
           if (!params.code || !this.oauth2Info.verifier || !this.oauth2Info.accountId) {
-            new Notice(`MultiSync: ${meta.label} auth failed — missing code or verifier.`);
+            new Notice(`${meta.label} auth failed — missing code or verifier.`);
             return;
           }
           try {
@@ -109,11 +109,11 @@ export default class MultiSyncPlugin extends Plugin {
                 }
               } catch { /* keep existing name */ }
             }
-            new Notice(`MultiSync: ${account.name} connected!`);
+            new Notice(`${account.name} connected!`);
             this.settingsTab?.display();
           } catch (e: unknown) {
             const msg = e instanceof Error ? e.message : String(e);
-            new Notice(`MultiSync: ${meta.label} auth failed — ${msg}`);
+            new Notice(`${meta.label} auth failed — ${msg}`);
           }
           this.oauth2Info = {};
         }
@@ -580,7 +580,7 @@ export default class MultiSyncPlugin extends Plugin {
   /** Run the sync pipeline */
   async runSync(dryRun = false) {
     if (this.syncing) {
-      new Notice(`MultiSync: sync already in progress.`);
+      new Notice(`Sync already in progress.`);
       return;
     }
 
@@ -600,7 +600,7 @@ export default class MultiSyncPlugin extends Plugin {
     }
 
     if (pipeline.length === 0) {
-      new Notice(`MultiSync: no rules or pipeline steps configured. Go to settings.`);
+      new Notice(`No rules or pipeline steps configured. Go to settings.`);
       return;
     }
 
@@ -609,7 +609,7 @@ export default class MultiSyncPlugin extends Plugin {
     this.ribbonIconEl?.addClass("multisync-spin");
     this.statusBarEl?.setText("⟳ syncing…");
 
-    new Notice(dryRun ? "MultiSync: Dry run starting..." : "MultiSync: Starting sync...");
+    new Notice(dryRun ? "Dry run starting..." : "Starting sync...");
     const startTime = Date.now();
     let totalActions = 0;
     let completedActions = 0;
@@ -659,7 +659,7 @@ export default class MultiSyncPlugin extends Plugin {
       const mode = dryRun ? "[DRY RUN] " : "";
       if (result.errors.length > 0) {
         new Notice(
-          `MultiSync: ${mode}Done in ${elapsed}s. ${result.actionsExecuted} actions, ${result.errors.length} error(s).`
+          `${mode}Done in ${elapsed}s. ${result.actionsExecuted} actions, ${result.errors.length} error(s).`
         );
         for (const err of result.errors) {
           console.error(err);
@@ -667,7 +667,7 @@ export default class MultiSyncPlugin extends Plugin {
         this.statusBarEl?.setText(`✗ ${result.errors.length} error(s)`);
       } else {
         new Notice(
-          `MultiSync: ${mode}Done in ${elapsed}s. ${result.actionsExecuted} action(s) ${dryRun ? "detected" : "synced"}.`
+          `${mode}Done in ${elapsed}s. ${result.actionsExecuted} action(s) ${dryRun ? "detected" : "synced"}.`
         );
         this.statusBarEl?.setText(`✓ synced`);
       }
@@ -675,7 +675,7 @@ export default class MultiSyncPlugin extends Plugin {
       setTimeout(() => this.statusBarEl?.setText(""), 10000);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
-      new Notice(`MultiSync: sync failed! ${msg}`);
+      new Notice(`Sync failed! ${msg}`);
       console.error("MultiSync:", e);
       this.statusBarEl?.setText("✗ sync failed");
       setTimeout(() => this.statusBarEl?.setText(""), 10000);

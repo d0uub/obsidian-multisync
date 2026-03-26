@@ -5,6 +5,14 @@ import { requestUrl } from "obsidian";
 import { joinCloudPath } from "../utils/helpers";
 import { generatePKCE } from "./registry";
 
+/** GDrive API response types */
+interface GDFile { id?: string; name?: string; mimeType?: string; size?: string; modifiedTime?: string; md5Checksum?: string; parents?: string[]; trashed?: boolean }
+interface GDFileList { files?: GDFile[]; nextPageToken?: string }
+interface GDChangeList { changes?: GDChange[]; nextPageToken?: string; newStartPageToken?: string }
+interface GDChange { fileId?: string; removed?: boolean; file?: GDFile }
+interface GDAbout { user?: { displayName?: string }; storageQuota?: { usage?: string; limit?: string } }
+interface GDStartPage { startPageToken?: string }
+
 const GDRIVE_SCOPES = "https://www.googleapis.com/auth/drive";
 const CALLBACK = "multisync-cb-gdrive";
 const SVG_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12.01 1.485c-2.082 0-3.754.02-3.743.047.01.02 1.708 3.001 3.774 6.62l3.76 6.574h3.76c2.081 0 3.753-.02 3.742-.047-.005-.02-1.708-3.001-3.775-6.62l-3.76-6.574zm-4.76 1.73a789.828 789.861 0 0 0-3.63 6.319L0 15.868l1.89 3.298 1.885 3.297 3.62-6.335 3.618-6.33-1.88-3.287C8.1 4.704 7.255 3.22 7.25 3.214zm2.259 12.653-.203.348c-.114.198-.96 1.672-1.88 3.287a423.93 423.948 0 0 1-1.698 2.97c-.01.026 3.24.042 7.222.042h7.244l1.796-3.157c.992-1.734 1.85-3.23 1.906-3.323l.104-.167h-7.249z"/></svg>';
@@ -160,20 +168,20 @@ export class GDriveProvider implements ICloudProvider {
     this.onTokenRefreshed?.(this.accessToken, this.refreshToken, this.tokenExpiry);
   }
 
-  private async gdriveGet(url: string): Promise<any> {
+  private async gdriveGet<T = Record<string, unknown>>(url: string): Promise<T> {
     await this.ensureToken();
     const resp = await requestUrl({
       url,
       method: "GET",
       headers: { Authorization: `Bearer ${this.accessToken}` },
     });
-    return resp.json;
+    return resp.json as T;
   }
 
   /** Get the actual root drive folder ID (resolves "root" alias). */
   private async getActualRootId(): Promise<string> {
     if (!this.cachedRootId) {
-      const data = await this.gdriveGet("https://www.googleapis.com/drive/v3/files/root?fields=id");
+      const data = await this.gdriveGet<{id: string}>("https://www.googleapis.com/drive/v3/files/root?fields=id");
       this.cachedRootId = data.id;
     }
     return this.cachedRootId!;
@@ -200,7 +208,7 @@ export class GDriveProvider implements ICloudProvider {
         continue;
       }
       const query = `name='${part.replace(/'/g, "\\'")}' and '${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`;
-      const data = await this.gdriveGet(
+      const data = await this.gdriveGet<GDFileList>(
         `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name)&pageSize=1`
       );
       if (!data.files || data.files.length === 0) {
@@ -217,7 +225,7 @@ export class GDriveProvider implements ICloudProvider {
         });
         parentId = createResp.json.id;
       } else {
-        parentId = data.files[0].id;
+        parentId = data.files![0].id!;
       }
       this.folderIdCache.set(currentPath, parentId);
     }
@@ -259,41 +267,41 @@ export class GDriveProvider implements ICloudProvider {
         const query = `'${folderId}' in parents and trashed=false`;
         let url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=nextPageToken,files(id,name,mimeType,size,modifiedTime,md5Checksum)&pageSize=1000`;
         if (pageToken) url += `&pageToken=${pageToken}`;
-        const data = await this.gdriveGet(url);
+        const data = await this.gdriveGet<GDFileList>(url);
 
         for (const item of data.files || []) {
-          if (item.name.startsWith(".")) continue; // skip hidden files/folders
+          if (item.name!.startsWith(".")) continue; // skip hidden files/folders
           // Skip root self-reference ("My Drive" folder whose ID is the root drive)
           if (actualRootId && item.id === actualRootId) continue;
-          if (isGoogleNativeType(item.mimeType)) {
+          if (isGoogleNativeType(item.mimeType!)) {
             // Track native files per folder for marker generation
             const folderKey = prefix || ".";
             const list = this.nativeFilesPerFolder.get(folderKey) || [];
-            list.push(item.name);
+            list.push(item.name!);
             this.nativeFilesPerFolder.set(folderKey, list);
-            const nativePath = prefix ? `${prefix}/${item.name}` : item.name;
-            this.unsyncableFiles.push({ path: nativePath, name: item.name, size: 0, reason: "Google native" });
+            const nativePath = prefix ? `${prefix}/${item.name!}` : item.name!;
+            this.unsyncableFiles.push({ path: nativePath, name: item.name!, size: 0, reason: "Google native" });
             continue;
           }
           const isFolder = item.mimeType === "application/vnd.google-apps.folder";
-          const basePath = prefix ? `${prefix}/${sanitizeName(item.name)}` : sanitizeName(item.name);
+          const basePath = prefix ? `${prefix}/${sanitizeName(item.name!)}` : sanitizeName(item.name!);
 
           // Cache file/folder ID for later path→ID resolution
           if (isFolder) {
-            this.folderIdCache.set(joinCloudPath(cloudFolder, basePath), item.id);
+            this.folderIdCache.set(joinCloudPath(cloudFolder, basePath), item.id!);
           } else {
-            this.fileIdCache.set(basePath, item.id);
+            this.fileIdCache.set(basePath, item.id!);
           }
           entries.push({
             path: isFolder ? basePath + "/" : basePath,
-            mtime: new Date(item.modifiedTime).getTime(),
+            mtime: new Date(item.modifiedTime!).getTime(),
             size: parseInt(item.size || "0", 10),
             isFolder,
             hash: item.md5Checksum,
             cloudId: item.id,
           });
           if (isFolder) {
-            await recurse(item.id, basePath);
+            await recurse(item.id!, basePath);
           }
         }
         pageToken = data.nextPageToken || "";
@@ -342,9 +350,9 @@ export class GDriveProvider implements ICloudProvider {
         headers: { Authorization: `Bearer ${this.accessToken}` },
       });
       return resp.arrayBuffer;
-    } catch (e: any) {
-      // 403 = Google native type (Docs/Sheets/etc.) can't be downloaded as binary
-      if (e?.status === 403) return new ArrayBuffer(0);
+    } catch (e) {
+      // 403 = Google native type (Docs/Sheets/etc.) can’t be downloaded as binary
+      if ((e as { status?: number })?.status === 403) return new ArrayBuffer(0);
       throw e;
     }
   }
@@ -454,11 +462,11 @@ export class GDriveProvider implements ICloudProvider {
       }
       // Check if folder exists
       const query = `name='${part.replace(/'/g, "\\'")}' and '${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`;
-      const existing = await this.gdriveGet(
+      const existing = await this.gdriveGet<GDFileList>(
         `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id)&pageSize=1`
       );
       if (existing.files && existing.files.length > 0) {
-        parentId = existing.files[0].id;
+        parentId = existing.files[0].id!;
       } else {
         await this.ensureToken();
         const resp = await requestUrl({
@@ -488,13 +496,13 @@ export class GDriveProvider implements ICloudProvider {
   async stat(cloudFolder: string, relativePath: string): Promise<FileEntry | null> {
     try {
       const fileId = await this.resolveFileId(cloudFolder, relativePath);
-      const data = await this.gdriveGet(
+      const data = await this.gdriveGet<GDFile>(
         `https://www.googleapis.com/drive/v3/files/${fileId}?fields=name,mimeType,size,modifiedTime,md5Checksum,trashed`
       );
       if (data.trashed) return null;
       return {
         path: relativePath,
-        mtime: new Date(data.modifiedTime).getTime(),
+        mtime: new Date(data.modifiedTime!).getTime(),
         size: parseInt(data.size || "0", 10),
         isFolder: data.mimeType === "application/vnd.google-apps.folder",
         hash: data.md5Checksum,
@@ -527,19 +535,19 @@ export class GDriveProvider implements ICloudProvider {
       let newDeltaToken = deltaToken;
 
       while (pageToken) {
-        const params = new URLSearchParams({
+        const params: URLSearchParams = new URLSearchParams({
           pageToken,
           restrictToMyDrive: "true",
           includeRemoved: "true",
           fields: "changes(fileId,removed,file(id,name,mimeType,trashed,parents)),nextPageToken,newStartPageToken",
           pageSize: "1000",
         });
-        const data = await this.gdriveGet(`https://www.googleapis.com/drive/v3/changes?${params}`);
+        const data: GDChangeList = await this.gdriveGet<GDChangeList>(`https://www.googleapis.com/drive/v3/changes?${params}`);
 
         for (const change of data.changes || []) {
           if (!change.removed && !change.file?.trashed) continue;
           // Resolve fileId to path via idToPathMap (cloud registry)
-          const relativePath = _idToPathMap?.[change.fileId];
+          const relativePath = _idToPathMap?.[change.fileId!];
           if (relativePath) deleted.push(relativePath);
         }
 
@@ -568,13 +576,13 @@ export class GDriveProvider implements ICloudProvider {
     const parts: string[] = [];
     let currentId = fileId;
     while (currentId && currentId !== "root" && currentId !== actualRoot) {
-      const data = await this.gdriveGet(
+      const data = await this.gdriveGet<GDFile>(
         `https://www.googleapis.com/drive/v3/files/${currentId}?fields=name,parents`
       );
       const parentId = data.parents?.[0] || "";
       // If no parent or parent is root, this is the root drive folder — don't include it
       if (!parentId || parentId === "root" || parentId === actualRoot) break;
-      parts.unshift(sanitizeName(data.name));
+      parts.unshift(sanitizeName(data.name!));
       currentId = parentId;
     }
     return parts.join("/");
@@ -606,21 +614,21 @@ export class GDriveProvider implements ICloudProvider {
             pageSize: "1000",
           });
           if (pageToken) params.set("pageToken", pageToken);
-          const data = await this.gdriveGet(`https://www.googleapis.com/drive/v3/files?${params}`);
+          const data = await this.gdriveGet<GDFileList>(`https://www.googleapis.com/drive/v3/files?${params}`);
           for (const file of data.files || []) {
-            if (file.name.startsWith(".")) continue; // skip hidden files/folders
+            if (file.name!.startsWith(".")) continue; // skip hidden files/folders
             if (file.id === actualRootId) continue; // skip root self-reference
-            if (isGoogleNativeType(file.mimeType)) continue;
+            if (isGoogleNativeType(file.mimeType!)) continue;
             const isFolder = file.mimeType === "application/vnd.google-apps.folder";
-            const fullPath = await this.resolveFullPath(file.name, file.parents, isFolder);
+            const fullPath = await this.resolveFullPath(file.name!, file.parents, isFolder);
             changes.push({
-              id: file.id,
+              id: file.id!,
               deleted: false,
               path: fullPath,
               entry: {
-                id: file.id,
+                id: file.id!,
                 path: fullPath,
-                mtime: new Date(file.modifiedTime).getTime(),
+                mtime: new Date(file.modifiedTime!).getTime(),
                 size: parseInt(file.size || "0", 10),
                 isFolder,
                 hash: file.md5Checksum,
@@ -638,33 +646,33 @@ export class GDriveProvider implements ICloudProvider {
       let pageToken: string | undefined = deltaToken;
       let newDeltaToken = deltaToken;
       while (pageToken) {
-        const params = new URLSearchParams({
+        const params: URLSearchParams = new URLSearchParams({
           pageToken,
           restrictToMyDrive: "true",
           includeRemoved: "true",
           fields: "changes(fileId,removed,file(id,name,mimeType,size,modifiedTime,md5Checksum,trashed,parents)),nextPageToken,newStartPageToken",
           pageSize: "1000",
         });
-        const data = await this.gdriveGet(`https://www.googleapis.com/drive/v3/changes?${params}`);
+        const data: GDChangeList = await this.gdriveGet<GDChangeList>(`https://www.googleapis.com/drive/v3/changes?${params}`);
 
         for (const change of data.changes || []) {
           if (change.fileId === actualRootId) continue; // skip root self-reference
           if (change.removed || change.file?.trashed) {
-            changes.push({ id: change.fileId, deleted: true });
+            changes.push({ id: change.fileId!, deleted: true });
           } else if (change.file) {
             const f = change.file;
-            if (isGoogleNativeType(f.mimeType)) continue;
-            if (f.name.startsWith(".")) continue; // skip hidden files/folders
+            if (isGoogleNativeType(f.mimeType!)) continue;
+            if (f.name!.startsWith(".")) continue; // skip hidden files/folders
             const isFolder = f.mimeType === "application/vnd.google-apps.folder";
-            const fullPath = await this.resolveFullPath(f.name, f.parents, isFolder);
+            const fullPath = await this.resolveFullPath(f.name!, f.parents, isFolder);
             changes.push({
-              id: f.id,
+              id: f.id!,
               deleted: false,
               path: fullPath,
               entry: {
-                id: f.id,
+                id: f.id!,
                 path: fullPath,
-                mtime: new Date(f.modifiedTime).getTime(),
+                mtime: new Date(f.modifiedTime!).getTime(),
                 size: parseInt(f.size || "0", 10),
                 isFolder,
                 hash: f.md5Checksum,
@@ -678,20 +686,20 @@ export class GDriveProvider implements ICloudProvider {
       }
 
       return { changes, newDeltaToken, isFullEnum };
-    } catch (e: any) {
+    } catch (e) {
       console.error("GDrive syncAccountDelta error:", e);
       return { changes: [], newDeltaToken: "", isFullEnum: false };
     }
   }
 
   async getBaselineDeltaToken(): Promise<string> {
-    const data = await this.gdriveGet("https://www.googleapis.com/drive/v3/changes/startPageToken");
+    const data = await this.gdriveGet<GDStartPage>("https://www.googleapis.com/drive/v3/changes/startPageToken");
     return data.startPageToken || "";
   }
 
   async getDisplayName(): Promise<string> {
     try {
-      const about = await this.gdriveGet(
+      const about = await this.gdriveGet<GDAbout>(
         "https://www.googleapis.com/drive/v3/about?fields=user(displayName)"
       );
       return about.user?.displayName || "Google Drive";
@@ -702,7 +710,7 @@ export class GDriveProvider implements ICloudProvider {
 
   async getQuota(): Promise<{ used: number; total: number } | null> {
     try {
-      const about = await this.gdriveGet(
+      const about = await this.gdriveGet<GDAbout>(
         "https://www.googleapis.com/drive/v3/about?fields=storageQuota"
       );
       const q = about.storageQuota;
@@ -751,10 +759,10 @@ export class GDriveProvider implements ICloudProvider {
 
     for (const name of namesToTry) {
       const query = `name='${name.replace(/'/g, "\\'")}' and '${parentId}' in parents and trashed=false`;
-      const data = await this.gdriveGet(
+      const data = await this.gdriveGet<GDFileList>(
         `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id)&pageSize=1`
       );
-      if (data.files && data.files.length > 0) return data.files[0].id;
+      if (data.files && data.files.length > 0) return data.files[0].id!;
     }
     return null;
   }
